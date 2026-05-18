@@ -1,0 +1,35 @@
+- op: add
+  path: /spec/template/spec/containers/0/command
+  value:
+    - /dlv
+- op: replace
+  path: /spec/template/spec/containers/0/args
+  value:
+    - --listen=:40000
+    - --headless=true
+    - --api-version=2
+    - --accept-multiclient
+    - --continue=true
+    - exec
+    - /scheduler
+    - --
+    - --config=/etc/kubernetes/scheduler-config.yaml
+- op: add
+  path: /spec/template/spec/containers/0/ports
+  value:
+    - name: debug
+      containerPort: 40000
+      protocol: TCP
+- op: remove
+  path: /spec/template/spec/containers/0/livenessProbe
+- op: remove
+  path: /spec/template/spec/containers/0/readinessProbe
+- op: add
+  path: /spec/template/spec/containers/0/securityContext/capabilities
+  value:
+    add:
+      - SYS_PTRACE
+- op: add
+  path: /spec/template/spec/containers/0/securityContext/seccompProfile
+  value:
+    type: Unconfined

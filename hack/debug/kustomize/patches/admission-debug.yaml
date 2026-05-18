@@ -1,0 +1,32 @@
+- op: add
+  path: /spec/template/spec/containers/0/command
+  value:
+    - /dlv
+- op: replace
+  path: /spec/template/spec/containers/0/args
+  value:
+    - --listen=:40002
+    - --headless=true
+    - --api-version=2
+    - --accept-multiclient
+    - --continue=true
+    - exec
+    - /admission
+- op: add
+  path: /spec/template/spec/containers/0/ports
+  value:
+    - name: debug
+      containerPort: 40002
+      protocol: TCP
+- op: remove
+  path: /spec/template/spec/containers/0/livenessProbe
+- op: remove
+  path: /spec/template/spec/containers/0/readinessProbe
+- op: add
+  path: /spec/template/spec/containers/0/securityContext
+  value:
+    capabilities:
+      add:
+        - SYS_PTRACE
+    seccompProfile:
+      type: Unconfined

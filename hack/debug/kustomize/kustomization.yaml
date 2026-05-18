@@ -1,0 +1,21 @@
+resources:
+  - rendered.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: slurm-bridge-scheduler
+    path: patches/scheduler-debug.yaml
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: slurm-bridge-controllers
+    path: patches/controllers-debug.yaml
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: slurm-bridge-admission
+    path: patches/admission-debug.yaml
