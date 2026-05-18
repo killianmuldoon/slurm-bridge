@@ -1,17 +1,13 @@
 - op: add
   path: /spec/template/spec/containers/0/command
   value:
-    - /dlv
-- op: replace
+    - /dlv-reload-wrapper
+- op: add
   path: /spec/template/spec/containers/0/args
   value:
-    - --listen=:40000
-    - --headless=true
-    - --api-version=2
-    - --accept-multiclient
-    - --continue=true
-    - exec
-    - /scheduler
+    - /workspace/scheduler
+    - /workspace/next/scheduler
+    - "40000"
     - --
     - --config=/etc/kubernetes/scheduler-config.yaml
 - op: add
@@ -20,6 +16,11 @@
     - name: debug
       containerPort: 40000
       protocol: TCP
+- op: add
+  path: /spec/template/spec/containers/0/env/-
+  value:
+    name: DEBUG_CONTINUE
+    value: "true"
 - op: remove
   path: /spec/template/spec/containers/0/livenessProbe
 - op: remove

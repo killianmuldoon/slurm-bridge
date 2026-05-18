@@ -2,6 +2,10 @@
 # SPDX-FileCopyrightText: Copyright (C) SchedMD LLC.
 # SPDX-License-Identifier: Apache-2.0
 
+# Helm invokes this post-renderer from the Skaffold debug profile. It captures
+# Helm's rendered manifests, applies the debug Kustomize overlay, and emits the
+# patched deployments that run under the reloadable Delve wrapper.
+
 set -euo pipefail
 
 tmpdir="$(mktemp -d)"

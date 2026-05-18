@@ -1,17 +1,13 @@
 - op: add
   path: /spec/template/spec/containers/0/command
   value:
-    - /dlv
-- op: replace
+    - /dlv-reload-wrapper
+- op: add
   path: /spec/template/spec/containers/0/args
   value:
-    - --listen=:40001
-    - --headless=true
-    - --api-version=2
-    - --accept-multiclient
-    - --continue=true
-    - exec
-    - /controllers
+    - /workspace/controllers
+    - /workspace/next/controllers
+    - "40001"
     - --
     - -zap-log-level
     - info
@@ -21,6 +17,11 @@
     - name: debug
       containerPort: 40001
       protocol: TCP
+- op: add
+  path: /spec/template/spec/containers/0/env/-
+  value:
+    name: DEBUG_CONTINUE
+    value: "true"
 - op: remove
   path: /spec/template/spec/containers/0/livenessProbe
 - op: remove

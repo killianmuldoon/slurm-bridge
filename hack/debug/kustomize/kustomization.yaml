@@ -1,3 +1,6 @@
+# This overlay is copied into a temporary directory by helm-post-renderer.sh.
+# rendered.yaml is the Helm output; the patches convert the three deployments
+# into Delve reload targets for the Skaffold debug dev loop.
 resources:
   - rendered.yaml
 patches:

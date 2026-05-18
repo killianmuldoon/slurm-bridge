@@ -64,27 +64,27 @@ ENTRYPOINT ["/admission"]
 
 ################################################################################
 
-FROM gcr.io/distroless/static:nonroot AS scheduler-debug
+FROM gcr.io/distroless/static:debug-nonroot AS debug-base
 WORKDIR /
-COPY --from=debug-builder /workspace/scheduler .
+ENV PATH="/busybox:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 COPY --from=debug-builder /go/bin/dlv .
+COPY hack/debug/dlv-reload-wrapper.sh /dlv-reload-wrapper
+COPY --chown=65532:65532 hack/debug/keep /workspace/next/.keep
+COPY --chown=65532:65532 hack/debug/keep /tmp/skaffold-sync/.keep
 USER 65532:65532
-ENTRYPOINT ["/dlv"]
+ENTRYPOINT ["/dlv-reload-wrapper"]
 
 ################################################################################
 
-FROM gcr.io/distroless/static:nonroot AS controllers-debug
-WORKDIR /
-COPY --from=debug-builder /workspace/controllers .
-COPY --from=debug-builder /go/bin/dlv .
-USER 65532:65532
-ENTRYPOINT ["/dlv"]
+FROM debug-base AS scheduler-debug
+COPY --chown=65532:65532 --from=debug-builder /workspace/scheduler /workspace/scheduler
 
 ################################################################################
 
-FROM gcr.io/distroless/static:nonroot AS admission-debug
-WORKDIR /
-COPY --from=debug-builder /workspace/admission .
-COPY --from=debug-builder /go/bin/dlv .
-USER 65532:65532
-ENTRYPOINT ["/dlv"]
+FROM debug-base AS controllers-debug
+COPY --chown=65532:65532 --from=debug-builder /workspace/controllers /workspace/controllers
+
+################################################################################
+
+FROM debug-base AS admission-debug
+COPY --chown=65532:65532 --from=debug-builder /workspace/admission /workspace/admission

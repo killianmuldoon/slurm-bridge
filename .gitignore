@@ -136,6 +136,7 @@ $RECYCLE.BIN/
 *.tgz
 values-*.yaml
 *debug_bin*
+.skaffold-bin/
 *.yaml.debug
 hack/kubectl-kjob
 bake-metadata.json

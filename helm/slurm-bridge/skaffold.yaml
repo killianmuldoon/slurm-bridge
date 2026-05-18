@@ -56,6 +56,63 @@ profiles:
         path: /build/artifacts/2/docker/target
         value: controllers-debug
       - op: add
+        path: /build/artifacts/0/sync
+        value:
+          manual: &debug-file-sync-rules
+            - src: "**/*.go"
+              dest: /tmp/skaffold-sync/
+            - src: go.mod
+              dest: /tmp/skaffold-sync/
+            - src: go.sum
+              dest: /tmp/skaffold-sync/
+          hooks:
+            before:
+              - host:
+                  command:
+                    - ./hack/debug/build-binary.sh
+                    - scheduler
+                  dir: &debug-hook-dir ../..
+            after:
+              - host:
+                  command:
+                    - ./hack/debug/copy-and-sighup.sh
+                    - scheduler
+                  dir: *debug-hook-dir
+      - op: add
+        path: /build/artifacts/1/sync
+        value:
+          manual: *debug-file-sync-rules
+          hooks:
+            before:
+              - host:
+                  command:
+                    - ./hack/debug/build-binary.sh
+                    - admission
+                  dir: *debug-hook-dir
+            after:
+              - host:
+                  command:
+                    - ./hack/debug/copy-and-sighup.sh
+                    - admission
+                  dir: *debug-hook-dir
+      - op: add
+        path: /build/artifacts/2/sync
+        value:
+          manual: *debug-file-sync-rules
+          hooks:
+            before:
+              - host:
+                  command:
+                    - ./hack/debug/build-binary.sh
+                    - controllers
+                  dir: *debug-hook-dir
+            after:
+              - host:
+                  command:
+                    - ./hack/debug/copy-and-sighup.sh
+                    - controllers
+                  dir: *debug-hook-dir
+      - op: add
         path: /deploy/helm/flags
         value:
           install:

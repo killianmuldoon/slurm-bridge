@@ -72,7 +72,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ct
 
 	logger.Info("Started syncing Pod", "request", req)
 
-	logger.Info("foon")
 	onceBackoffGC.Do(func() {
 		go wait.Until(failedPodsBackoff.GC, BackoffGCInterval, ctx.Done())
 	})
@@ -81,7 +80,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ct
 	defer func() {
 		if retErr == nil {
 			if res.RequeueAfter > 0 {
-				logger.Info("Finishded syncing Pod", "duration", time.Since(startTime), "result", res)
+				logger.Info("Finished syncing Pod", "duration", time.Since(startTime), "result", res)
 			} else {
 				logger.Info("Finished syncing Pod", "duration", time.Since(startTime))
 			}

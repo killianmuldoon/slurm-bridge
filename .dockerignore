@@ -3,5 +3,9 @@
 !cmd/
 !internal/
 !pkg/
+!hack/
+!hack/debug/
+!hack/debug/dlv-reload-wrapper.sh
+!hack/debug/keep
 !go.mod
 !go.sum
