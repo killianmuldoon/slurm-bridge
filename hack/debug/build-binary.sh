@@ -20,10 +20,9 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 out_dir="$repo_root/.skaffold-bin"
-mkdir -p "$out_dir"
 pending="$out_dir/$component.pending"
-rm -f "$pending"
 changed_runtime_files=""
+dry_run="${DEBUG_BUILD_DRY_RUN:-false}"
 
 changed_files() {
 	local files="${SKAFFOLD_FILES_ADDED_OR_MODIFIED:-}"
@@ -156,6 +155,18 @@ component_changed() {
 
 	return 1
 }
+
+if [ "$dry_run" = "true" ]; then
+	if component_changed; then
+		echo "build"
+	else
+		echo "skip"
+	fi
+	exit 0
+fi
+
+mkdir -p "$out_dir"
+rm -f "$pending"
 
 if ! component_changed; then
 	if [ -n "$changed_runtime_files" ]; then

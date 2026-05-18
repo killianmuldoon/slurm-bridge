@@ -90,6 +90,15 @@ demo-cluster-delete: ## Delete the kind cluster.
 debug: ## Run all components with debug ports and live binary reload.
 	cd helm/slurm-bridge && skaffold dev -p debug --port-forward=user --tail
 
+.PHONY: debug-validate
+debug-validate: ## Validate the Skaffold debug profile and Helm debug post-renderer.
+	cd helm/slurm-bridge && skaffold diagnose -p debug --yaml-only >/dev/null
+	cd helm/slurm-bridge && helm template slurm-bridge ./ \
+		-n slinky \
+		-f ./values-dev.yaml \
+		--kube-version 1.34.0 \
+		--post-renderer ../../hack/debug/helm-post-renderer.sh >/dev/null
+
 .PHONY: install-dra
 install-dra: ## Add all DRA configs from hack/kind.sh (dra-driver-cpu and dra-example-driver).
 	./hack/kind.sh --dra-driver-cpu --dra-example-driver --bridge $(KIND_CLUSTER_NAME)

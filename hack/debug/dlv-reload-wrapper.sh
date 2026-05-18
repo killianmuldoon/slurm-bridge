@@ -22,7 +22,6 @@ if [ "${1:-}" = "--" ]; then
 	shift
 fi
 
-app_args="$*"
 child=""
 reloaded=false
 continue="${DEBUG_CONTINUE:-true}"
@@ -35,10 +34,9 @@ start() {
 
 	echo "starting delve for $bin on :$port"
 	if [ "$continue" = "false" ]; then
-		# This dev-only wrapper intentionally supports simple whitespace-delimited args.
-		/dlv --listen=":$port" --headless=true --api-version=2 --accept-multiclient exec "$bin" -- $app_args &
+		/dlv --listen=":$port" --headless=true --api-version=2 --accept-multiclient exec "$bin" -- "$@" &
 	else
-		/dlv --listen=":$port" --headless=true --api-version=2 --accept-multiclient --continue=true exec "$bin" -- $app_args &
+		/dlv --listen=":$port" --headless=true --api-version=2 --accept-multiclient --continue=true exec "$bin" -- "$@" &
 	fi
 	child="$!"
 }
@@ -70,7 +68,7 @@ reload() {
 	reloaded=true
 	stop
 	promote_next
-	start
+	start "$@"
 }
 
 shutdown() {
@@ -78,10 +76,10 @@ shutdown() {
 	exit 0
 }
 
-trap reload HUP
+trap 'reload "$@"' HUP
 trap shutdown INT TERM
 
-start
+start "$@"
 
 while true; do
 	status=0
