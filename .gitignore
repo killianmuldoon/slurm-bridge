@@ -140,3 +140,4 @@ values-*.yaml
 *.yaml.debug
 hack/kubectl-kjob
 bake-metadata.json
+kubeadm-*.conf
