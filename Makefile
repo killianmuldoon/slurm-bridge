@@ -92,7 +92,7 @@ demo-cluster-delete: ## Delete the kind cluster.
 
 .PHONY: debug
 debug: ## Run all components with debug ports and live binary reload.
-	cd helm/slurm-bridge && $(SKAFFOLD) dev -p debug --port-forward=user --tail
+	cd helm/slurm-bridge && $(SKAFFOLD) dev -p debug --port-forward=user
 
 .PHONY: debug-prereqs
 debug-prereqs: values-dev ## Install slurm-bridge debug prerequisites into the current Kubernetes context.
@@ -105,7 +105,7 @@ debug-deploy: values-dev ## Deploy slurm-bridge with the Skaffold debug profile 
 .PHONY: debug-remote
 debug-remote: values-dev ## Run debug dev loop for a remote cluster; requires SKAFFOLD_DEFAULT_REPO.
 	@test -n "$(SKAFFOLD_DEFAULT_REPO)" || { echo "SKAFFOLD_DEFAULT_REPO is required for remote cluster image pulls"; exit 1; }
-	cd helm/slurm-bridge && $(SKAFFOLD) dev -p debug,remote $(SKAFFOLD_REMOTE_ARGS) --port-forward=user --tail
+	cd helm/slurm-bridge && $(SKAFFOLD) dev -p debug,remote $(SKAFFOLD_REMOTE_ARGS) --port-forward=user
 
 .PHONY: debug-deploy-remote
 debug-deploy-remote: values-dev ## Deploy debug profile to a remote cluster; requires SKAFFOLD_DEFAULT_REPO.
