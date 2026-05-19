@@ -300,14 +300,17 @@ $(basename "$0") - Manage a kind cluster for a slurm-bridge slurm-bridge-demo
 
 	usage: $(basename "$0") [--config=KIND_CONFIG_PATH]
 	        [--recreate|--delete]
-	        [--extras] [--bridge] [--kjob] [--dra-example-driver] [--dra-driver-cpu] [--all]
+	        [--skip-cluster]
+	        [--extras] [--bridge-prereqs] [--bridge] [--kjob] [--dra-example-driver] [--dra-driver-cpu] [--all]
 	        [-h|--help] [--debug] [KIND_CLUSTER_NAME]
 
 OPTIONS:
 	--config=PATH       Use the specified kind config when creating.
 	--recreate          Delete the Kind cluster and continue.
 	--delete            Delete the Kind cluster and exit.
+	--skip-cluster      Use the current kubeconfig/context; do not create, delete, or select a kind cluster.
 	--extras            Install optional dependencies (metrics, prometheus, keda).
+	--bridge-prereqs    Install slurm-bridge prerequisites only; do not run skaffold.
 	--bridge            Install slurm-bridge
 	--kjob              Install kjob CRDs and build kubectl-kjob
 	--dra-driver-cpu    Install DRA driver: dra-driver-cpu
@@ -326,12 +329,21 @@ function main() {
 		set -x
 	fi
 	local cluster_name="${1:-"kind"}"
+	if $OPT_SKIP_CLUSTER && { $OPT_DELETE || $OPT_RECREATE; }; then
+		echo "--skip-cluster cannot be used with --delete or --recreate" >&2
+		exit 1
+	fi
 	if $OPT_DELETE || $OPT_RECREATE; then
 		kind::delete "$cluster_name"
 		$OPT_DELETE && return
 	fi
 
-	kind::start "$cluster_name" "$OPT_CONFIG"
+	if $OPT_SKIP_CLUSTER; then
+		sys::check
+		kubectl cluster-info
+	else
+		kind::start "$cluster_name" "$OPT_CONFIG"
+	fi
 
 	make -C "$ROOT_DIR" values-dev || true
 
@@ -343,6 +355,9 @@ function main() {
 	fi
 	if $OPT_DRA_EXAMPLE_DRIVER; then
 		dra-example-driver::install "$cluster_name"
+	fi
+	if $OPT_BRIDGE_PREREQS; then
+		slurm-bridge::prerequisites
 	fi
 	if $OPT_BRIDGE; then
 		slurm-bridge::install
@@ -357,13 +372,15 @@ OPT_RECREATE=false
 OPT_CONFIG="$SCRIPT_DIR/kind.yaml"
 OPT_DELETE=false
 OPT_BRIDGE=false
+OPT_BRIDGE_PREREQS=false
 OPT_EXTRAS=false
 OPT_DRA_DRIVER_CPU=false
 OPT_DRA_EXAMPLE_DRIVER=false
 OPT_KJOB=false
+OPT_SKIP_CLUSTER=false
 
 SHORT="+h"
-LONG="all,recreate,config:,delete,debug,bridge,extras,kjob,dra-driver-cpu,dra-example-driver,help"
+LONG="all,recreate,config:,delete,debug,skip-cluster,bridge-prereqs,bridge,extras,kjob,dra-driver-cpu,dra-example-driver,help"
 OPTS="$(getopt -a --options "$SHORT" --longoptions "$LONG" -- "$@")"
 eval set -- "${OPTS}"
 while :; do
@@ -382,6 +399,14 @@ while :; do
 		;;
 	--delete)
 		OPT_DELETE=true
+		shift
+		;;
+	--skip-cluster)
+		OPT_SKIP_CLUSTER=true
+		shift
+		;;
+	--bridge-prereqs)
+		OPT_BRIDGE_PREREQS=true
 		shift
 		;;
 	--bridge)

@@ -47,6 +47,11 @@ deploy:
 # 0=scheduler, 1=admission, 2=controllers.
 # Run `make debug-validate` after changing build.artifacts.
 profiles:
+  - name: remote
+    patches:
+      - op: replace
+        path: /build/local/push
+        value: true
   - name: debug
     patches:
       - op: replace
