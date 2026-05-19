@@ -30,7 +30,15 @@ ARG DELVE_VERSION=latest
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go install github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}
+RUN target_os="${TARGETOS:-linux}" && \
+    target_arch="${TARGETARCH:-$(go env GOARCH)}" && \
+    CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" go install github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION} && \
+    mkdir -p /workspace/debug-bin && \
+    if [ -x "$(go env GOPATH)/bin/dlv" ]; then \
+        cp "$(go env GOPATH)/bin/dlv" /workspace/debug-bin/dlv; \
+    else \
+        cp "$(go env GOPATH)/bin/${target_os}_${target_arch}/dlv" /workspace/debug-bin/dlv; \
+    fi
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -gcflags=all="-N -l" -o /workspace ./...
@@ -67,7 +75,7 @@ ENTRYPOINT ["/admission"]
 FROM gcr.io/distroless/static:debug-nonroot AS debug-base
 WORKDIR /
 ENV PATH="/busybox:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-COPY --from=debug-builder /go/bin/dlv .
+COPY --from=debug-builder /workspace/debug-bin/dlv .
 COPY hack/debug/dlv-reload-wrapper.sh /dlv-reload-wrapper
 COPY --chown=65532:65532 hack/debug/keep /workspace/next/.keep
 COPY --chown=65532:65532 hack/debug/keep /tmp/skaffold-sync/.keep
