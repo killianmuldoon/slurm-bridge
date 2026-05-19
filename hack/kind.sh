@@ -108,6 +108,28 @@ function helm::find() {
 	return 0
 }
 
+function storage::default_class() {
+	kubectl get storageclass \
+		-o go-template='{{range .items}}{{if eq (index .metadata.annotations "storageclass.kubernetes.io/is-default-class") "true"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
+		2>/dev/null || true
+}
+
+function local-path::install() {
+	local version="${LOCAL_PATH_PROVISIONER_VERSION:-v0.0.35}"
+	local default_class
+
+	echo "[storage] Installing local-path-provisioner ${version}..."
+	kubectl apply -f "https://raw.githubusercontent.com/rancher/local-path-provisioner/${version}/deploy/local-path-storage.yaml"
+
+	default_class="$(storage::default_class)"
+	if [ -z "$default_class" ]; then
+		echo "[storage] Marking local-path as the default StorageClass..."
+		kubectl annotate storageclass local-path storageclass.kubernetes.io/is-default-class=true --overwrite
+	else
+		echo "[storage] Default StorageClass already exists: ${default_class}"
+	fi
+}
+
 function slurm-bridge::install() {
 	slurm-bridge::prerequisites
 	echo "[slurm-bridge] Running skaffold (build and deploy slurm-bridge)..."
@@ -301,7 +323,8 @@ $(basename "$0") - Manage a kind cluster for a slurm-bridge slurm-bridge-demo
 	usage: $(basename "$0") [--config=KIND_CONFIG_PATH]
 	        [--recreate|--delete]
 	        [--skip-cluster]
-	        [--extras] [--bridge-prereqs] [--bridge] [--kjob] [--dra-example-driver] [--dra-driver-cpu] [--all]
+	        [--local-path-storage] [--extras] [--bridge-prereqs] [--bridge]
+	        [--kjob] [--dra-example-driver] [--dra-driver-cpu] [--all]
 	        [-h|--help] [--debug] [KIND_CLUSTER_NAME]
 
 OPTIONS:
@@ -309,6 +332,7 @@ OPTIONS:
 	--recreate          Delete the Kind cluster and continue.
 	--delete            Delete the Kind cluster and exit.
 	--skip-cluster      Use the current kubeconfig/context; do not create, delete, or select a kind cluster.
+	--local-path-storage Install Rancher local-path-provisioner and make it default only when no default StorageClass exists.
 	--extras            Install optional dependencies (metrics, prometheus, keda).
 	--bridge-prereqs    Install slurm-bridge prerequisites only; do not run skaffold.
 	--bridge            Install slurm-bridge
@@ -350,6 +374,9 @@ function main() {
 	if $OPT_EXTRAS; then
 		extras::install
 	fi
+	if $OPT_LOCAL_PATH_STORAGE; then
+		local-path::install
+	fi
 	if $OPT_DRA_DRIVER_CPU; then
 		dra-driver-cpu::install "$cluster_name"
 	fi
@@ -378,9 +405,10 @@ OPT_DRA_DRIVER_CPU=false
 OPT_DRA_EXAMPLE_DRIVER=false
 OPT_KJOB=false
 OPT_SKIP_CLUSTER=false
+OPT_LOCAL_PATH_STORAGE=false
 
 SHORT="+h"
-LONG="all,recreate,config:,delete,debug,skip-cluster,bridge-prereqs,bridge,extras,kjob,dra-driver-cpu,dra-example-driver,help"
+LONG="all,recreate,config:,delete,debug,skip-cluster,local-path-storage,bridge-prereqs,bridge,extras,kjob,dra-driver-cpu,dra-example-driver,help"
 OPTS="$(getopt -a --options "$SHORT" --longoptions "$LONG" -- "$@")"
 eval set -- "${OPTS}"
 while :; do
@@ -403,6 +431,10 @@ while :; do
 		;;
 	--skip-cluster)
 		OPT_SKIP_CLUSTER=true
+		shift
+		;;
+	--local-path-storage)
+		OPT_LOCAL_PATH_STORAGE=true
 		shift
 		;;
 	--bridge-prereqs)

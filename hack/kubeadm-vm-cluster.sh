@@ -11,6 +11,7 @@ set -euo pipefail
 
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
 IB_WORKER_IPS=()
+NORMAL_WORKER_IPS=()
 REMOTE_USER="${REMOTE_USER:-root}"
 REMOTE_PASSWORD="${REMOTE_PASSWORD:-}"
 NODE_INTERFACE="${NODE_INTERFACE:-eth1}"
@@ -42,6 +43,7 @@ usage: $(basename "$0") [options]
 Options:
   --control-plane IP      Control-plane VM IP. Required.
   --worker IP             IB worker VM IP. Required; may be repeated.
+  --normal-worker IP      Untainted worker VM IP. May be repeated.
   --user USER             SSH user. Default: ${REMOTE_USER}
   --password PASS         SSH password. Prefer REMOTE_PASSWORD=... to avoid shell history.
   --node-interface IFACE  Interface used for Kubernetes node IPs. Default: ${NODE_INTERFACE}
@@ -58,11 +60,13 @@ Examples:
   REMOTE_PASSWORD=3tango $(basename "$0") \\
     --control-plane 10.237.153.215 \\
     --worker 10.237.153.203 \\
-    --worker 10.237.153.204
+    --worker 10.237.153.204 \\
+    --normal-worker 10.237.153.213
   REMOTE_PASSWORD=3tango $(basename "$0") --reset \\
     --control-plane 10.237.153.215 \\
     --worker 10.237.153.203 \\
-    --worker 10.237.153.204
+    --worker 10.237.153.204 \\
+    --normal-worker 10.237.153.213
 EOF
 }
 
@@ -82,6 +86,14 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--worker=*)
 		IB_WORKER_IPS+=("${1#*=}")
+		shift
+		;;
+	--normal-worker)
+		NORMAL_WORKER_IPS+=("$2")
+		shift 2
+		;;
+	--normal-worker=*)
+		NORMAL_WORKER_IPS+=("${1#*=}")
 		shift
 		;;
 	--user)
@@ -502,7 +514,7 @@ function write_kubeconfig() {
 	chmod 0600 "$KUBECONFIG_OUT"
 }
 
-all_ips=("$CONTROL_PLANE_IP" "${IB_WORKER_IPS[@]}")
+all_ips=("$CONTROL_PLANE_IP" "${IB_WORKER_IPS[@]}" "${NORMAL_WORKER_IPS[@]}")
 
 for ip in "${all_ips[@]}"; do
 	if $RESET; then
@@ -529,6 +541,16 @@ for ip in "${IB_WORKER_IPS[@]}"; do
 	fi
 	require_ip_address "worker node IP for ${ip}" "$node_ip"
 	join_worker "$ip" "$node_name" "$node_ip" true
+done
+
+for ip in "${NORMAL_WORKER_IPS[@]}"; do
+	node_name="$(node_name_for "$ip")"
+	node_ip="$(node_ip_for "$ip")"
+	if [[ -z "$node_name" || -z "$node_ip" ]]; then
+		fail "could not determine node name/IP for ${ip}"
+	fi
+	require_ip_address "normal worker node IP for ${ip}" "$node_ip"
+	join_worker "$ip" "$node_name" "$node_ip" false
 done
 
 write_kubeconfig

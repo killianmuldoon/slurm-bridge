@@ -96,7 +96,7 @@ debug: ## Run all components with debug ports and live binary reload.
 
 .PHONY: debug-prereqs
 debug-prereqs: values-dev ## Install slurm-bridge debug prerequisites into the current Kubernetes context.
-	./hack/kind.sh --skip-cluster --bridge-prereqs
+	./hack/kind.sh --skip-cluster $(DEBUG_PREREQS_ARGS) --bridge-prereqs
 
 .PHONY: debug-deploy
 debug-deploy: values-dev ## Deploy slurm-bridge with the Skaffold debug profile without starting the dev loop.
