@@ -126,6 +126,23 @@ debug-validate: ## Validate the Skaffold debug profile and Helm debug post-rende
 install-dra: ## Add all DRA configs from hack/kind.sh (dra-driver-cpu and dra-example-driver).
 	./hack/kind.sh --dra-driver-cpu --dra-example-driver --bridge $(KIND_CLUSTER_NAME)
 
+DRANET_VERSION ?= latest
+DRANET_ROLLOUT_TIMEOUT ?= 180s
+DRANET_TAINT_KEY ?= slinky.slurm.net/managed-node
+DRANET_TAINT_VALUE ?= slurm-bridge-scheduler
+
+.PHONY: install-dranet
+install-dranet: ## Install DRANET into the current Kubernetes context; requires containerd NRI.
+	DRANET_VERSION=$(DRANET_VERSION) \
+	DRANET_ROLLOUT_TIMEOUT=$(DRANET_ROLLOUT_TIMEOUT) \
+	DRANET_TAINT_KEY=$(DRANET_TAINT_KEY) \
+	DRANET_TAINT_VALUE=$(DRANET_TAINT_VALUE) \
+	./hack/dranet.sh
+
+.PHONY: uninstall-dranet
+uninstall-dranet: ## Uninstall DRANET from the current Kubernetes context.
+	./hack/dranet.sh uninstall
+
 .PHONY: setup-sysctl
 setup-sysctl: ## Set kernel/sysctl values recommended for kind/demo (requires sudo).
 	./hack/sysctl.sh

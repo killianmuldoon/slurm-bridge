@@ -10,8 +10,8 @@
 set -euo pipefail
 
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
-IB_WORKER_IPS=()
-NORMAL_WORKER_IPS=()
+WORKER_IPS=()
+SLURM_WORKER_IPS=()
 REMOTE_USER="${REMOTE_USER:-root}"
 REMOTE_PASSWORD="${REMOTE_PASSWORD:-}"
 NODE_INTERFACE="${NODE_INTERFACE:-eth1}"
@@ -21,6 +21,8 @@ SERVICE_CIDR="${SERVICE_CIDR:-10.96.0.0/12}"
 CLUSTER_NAME="${CLUSTER_NAME:-slurm-bridge-vm}"
 PARTITION="${PARTITION:-slurm-bridge}"
 CALICO_VERSION="${CALICO_VERSION:-v3.32.0}"
+ENABLE_CONTAINERD_NRI="${ENABLE_CONTAINERD_NRI:-true}"
+YQ_VERSION="${YQ_VERSION:-v4.53.2}"
 RESET=false
 SKIP_CNI=false
 KUBECONFIG_OUT="${KUBECONFIG_OUT:-}"
@@ -42,31 +44,35 @@ usage: $(basename "$0") [options]
 
 Options:
   --control-plane IP      Control-plane VM IP. Required.
-  --worker IP             IB worker VM IP. Required; may be repeated.
-  --normal-worker IP      Untainted worker VM IP. May be repeated.
+  --worker IP             Untainted worker VM IP. Required unless --slurm-worker is set; may be repeated.
+  --slurm-worker IP       Slurm-managed worker VM IP. Gets slurm-bridge labels, taint, and partition annotation.
+                           May be repeated.
+  --normal-worker IP      Deprecated alias for --worker.
   --user USER             SSH user. Default: ${REMOTE_USER}
   --password PASS         SSH password. Prefer REMOTE_PASSWORD=... to avoid shell history.
   --node-interface IFACE  Interface used for Kubernetes node IPs. Default: ${NODE_INTERFACE}
   --k8s-version VERSION   Kubernetes version. Default: ${K8S_VERSION}
   --pod-cidr CIDR         Pod CIDR. Default: ${POD_CIDR}
   --service-cidr CIDR     Service CIDR. Default: ${SERVICE_CIDR}
-  --partition NAME        slurm-bridge partition annotation for IB workers. Default: ${PARTITION}
+  --partition NAME        slurm-bridge partition annotation for Slurm-managed workers. Default: ${PARTITION}
   --kubeconfig PATH       Write admin kubeconfig locally after init.
   --skip-cni              Do not install Calico.
+  --disable-containerd-nri
+                          Do not enable containerd NRI during node preparation.
   --reset                 Run kubeadm reset and clear CNI state before init/join.
   -h, --help              Show this help.
 
 Examples:
   REMOTE_PASSWORD=3tango $(basename "$0") \\
     --control-plane 10.237.153.215 \\
-    --worker 10.237.153.203 \\
-    --worker 10.237.153.204 \\
-    --normal-worker 10.237.153.213
+    --worker 10.237.153.213 \\
+    --slurm-worker 10.237.153.203 \\
+    --slurm-worker 10.237.153.204
   REMOTE_PASSWORD=3tango $(basename "$0") --reset \\
     --control-plane 10.237.153.215 \\
-    --worker 10.237.153.203 \\
-    --worker 10.237.153.204 \\
-    --normal-worker 10.237.153.213
+    --worker 10.237.153.213 \\
+    --slurm-worker 10.237.153.203 \\
+    --slurm-worker 10.237.153.204
 EOF
 }
 
@@ -81,19 +87,27 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--worker)
-		IB_WORKER_IPS+=("$2")
+		WORKER_IPS+=("$2")
 		shift 2
 		;;
 	--worker=*)
-		IB_WORKER_IPS+=("${1#*=}")
+		WORKER_IPS+=("${1#*=}")
+		shift
+		;;
+	--slurm-worker)
+		SLURM_WORKER_IPS+=("$2")
+		shift 2
+		;;
+	--slurm-worker=*)
+		SLURM_WORKER_IPS+=("${1#*=}")
 		shift
 		;;
 	--normal-worker)
-		NORMAL_WORKER_IPS+=("$2")
+		WORKER_IPS+=("$2")
 		shift 2
 		;;
 	--normal-worker=*)
-		NORMAL_WORKER_IPS+=("${1#*=}")
+		WORKER_IPS+=("${1#*=}")
 		shift
 		;;
 	--user)
@@ -164,6 +178,10 @@ while [[ $# -gt 0 ]]; do
 		SKIP_CNI=true
 		shift
 		;;
+	--disable-containerd-nri)
+		ENABLE_CONTAINERD_NRI=false
+		shift
+		;;
 	--reset)
 		RESET=true
 		shift
@@ -181,8 +199,11 @@ done
 if [[ -z "$CONTROL_PLANE_IP" ]]; then
 	fail "--control-plane IP is required"
 fi
-if [[ ${#IB_WORKER_IPS[@]} -eq 0 ]]; then
-	fail "at least one --worker IP is required"
+if [[ $((${#WORKER_IPS[@]} + ${#SLURM_WORKER_IPS[@]})) -eq 0 ]]; then
+	fail "at least one --worker or --slurm-worker IP is required"
+fi
+if [[ ${#WORKER_IPS[@]} -eq 0 ]]; then
+	log "warning: no untainted --worker nodes supplied; infrastructure pods may remain Pending on tainted nodes"
 fi
 
 if [[ -z "$KUBECONFIG_OUT" ]]; then
@@ -346,15 +367,66 @@ net.ipv4.ip_forward                 = 1
 EOF
 sysctl --system >/dev/null
 
-mkdir -p /etc/containerd
-if [[ ! -s /etc/containerd/config.toml ]] ||
-	grep -Eq '^[[:space:]]*disabled_plugins[[:space:]]*=.*"cri"' /etc/containerd/config.toml; then
-	if [[ -s /etc/containerd/config.toml ]]; then
-		cp /etc/containerd/config.toml "/etc/containerd/config.toml.$(date +%Y%m%d%H%M%S).bak"
+function install_yq() {
+	local arch
+	if command -v yq >/dev/null 2>&1 && yq --version | grep -q "version ${YQ_VERSION}\$"; then
+		return
 	fi
-	containerd config default >/etc/containerd/config.toml
+	case "$(uname -m)" in
+	x86_64 | amd64)
+		arch="amd64"
+		;;
+	aarch64 | arm64)
+		arch="arm64"
+		;;
+	*)
+		echo "unsupported architecture for yq: $(uname -m)" >&2
+		exit 1
+		;;
+	esac
+	curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}"
+	chmod 0755 /usr/local/bin/yq
+}
+
+function configure_containerd() {
+	local config="/etc/containerd/config.toml"
+	local backup
+
+	mkdir -p /etc/containerd
+	if [[ ! -s "$config" ]]; then
+		containerd config default >"$config"
+	fi
+
+	install_yq
+	if ! yq -p toml '.' "$config" >/dev/null; then
+		backup="/etc/containerd/config.toml.invalid.$(date +%Y%m%d%H%M%S).bak"
+		cp "$config" "$backup"
+		echo "containerd config was invalid TOML; saved ${backup} and regenerated it" >&2
+		containerd config default >"$config"
+	fi
+
+	backup="/etc/containerd/config.toml.$(date +%Y%m%d%H%M%S).bak"
+	cp "$config" "$backup"
+	if [[ "$ENABLE_CONTAINERD_NRI" == "true" ]]; then
+		yq -p toml -o toml -i '
+			.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true |
+			.plugins."io.containerd.nri.v1.nri".disable = false |
+			.plugins."io.containerd.nri.v1.nri".disable_connections = false
+		' "$config"
+	else
+		yq -p toml -o toml -i '
+			.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true
+		' "$config"
+	fi
+	yq -p toml '.' "$config" >/dev/null
+}
+
+mkdir -p /etc/containerd
+if [[ "$ENABLE_CONTAINERD_NRI" == "true" ]]; then
+	mkdir -p /etc/nri/conf.d /opt/nri/plugins /var/run/nri
 fi
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+configure_containerd
+
 systemctl enable --now containerd
 systemctl restart containerd
 
@@ -362,10 +434,27 @@ if ! ctr plugins ls | awk '$1 == "io.containerd.grpc.v1" && $2 == "cri" && $4 ==
 	echo "containerd CRI plugin is not enabled after restart" >&2
 	exit 1
 fi
+
+if [[ "$ENABLE_CONTAINERD_NRI" == "true" ]]; then
+	if ! ctr plugins ls | awk '$1 == "io.containerd.nri.v1" && $2 == "nri" && $4 == "ok" { found = 1 } END { exit !found }'; then
+		echo "containerd NRI plugin is not enabled after restart" >&2
+		exit 1
+	fi
+	for _ in {1..20}; do
+		if [[ -S /var/run/nri/nri.sock ]]; then
+			break
+		fi
+		sleep 0.5
+	done
+	if [[ ! -S /var/run/nri/nri.sock ]]; then
+		echo "containerd NRI socket was not created after restart" >&2
+		exit 1
+	fi
+fi
 REMOTE
 	scp_to_remote "$ip" "$prepare_script" /tmp/kubeadm-vm-prepare.sh
 	rm -f "$prepare_script"
-	remote "$ip" "NODE_INTERFACE='${NODE_INTERFACE}' K8S_VERSION='${K8S_VERSION}' K8S_MINOR='${K8S_MINOR}' bash /tmp/kubeadm-vm-prepare.sh"
+	remote "$ip" "NODE_INTERFACE='${NODE_INTERFACE}' K8S_VERSION='${K8S_VERSION}' K8S_MINOR='${K8S_MINOR}' ENABLE_CONTAINERD_NRI='${ENABLE_CONTAINERD_NRI}' YQ_VERSION='${YQ_VERSION}' bash /tmp/kubeadm-vm-prepare.sh"
 }
 
 function reset_node() {
@@ -497,6 +586,10 @@ EOF
 		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge=worker scheduler.slinky.slurm.net/external-node=true --overwrite"
 		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint node '${node_name}' slinky.slurm.net/managed-node=slurm-bridge-scheduler:NoExecute --overwrite"
 		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions='${PARTITION}' --overwrite"
+	else
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint node '${node_name}' slinky.slurm.net/managed-node- || true"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge- scheduler.slinky.slurm.net/external-node- || true"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions- || true"
 	fi
 }
 
@@ -514,13 +607,16 @@ function write_kubeconfig() {
 	chmod 0600 "$KUBECONFIG_OUT"
 }
 
-all_ips=("$CONTROL_PLANE_IP" "${IB_WORKER_IPS[@]}" "${NORMAL_WORKER_IPS[@]}")
+all_ips=("$CONTROL_PLANE_IP" "${WORKER_IPS[@]}" "${SLURM_WORKER_IPS[@]}")
 
 for ip in "${all_ips[@]}"; do
 	if $RESET; then
 		reset_node "$ip"
 	fi
 	prepare_node "$ip"
+	if $RESET; then
+		reset_node "$ip"
+	fi
 done
 
 CONTROL_PLANE_NODE_NAME="$(node_name_for "$CONTROL_PLANE_IP")"
@@ -533,24 +629,24 @@ require_ip_address "control-plane node IP" "$CONTROL_PLANE_NODE_IP"
 init_control_plane "$CONTROL_PLANE_NODE_NAME" "$CONTROL_PLANE_NODE_IP"
 install_calico
 
-for ip in "${IB_WORKER_IPS[@]}"; do
+for ip in "${WORKER_IPS[@]}"; do
 	node_name="$(node_name_for "$ip")"
 	node_ip="$(node_ip_for "$ip")"
 	if [[ -z "$node_name" || -z "$node_ip" ]]; then
 		fail "could not determine node name/IP for ${ip}"
 	fi
 	require_ip_address "worker node IP for ${ip}" "$node_ip"
-	join_worker "$ip" "$node_name" "$node_ip" true
+	join_worker "$ip" "$node_name" "$node_ip" false
 done
 
-for ip in "${NORMAL_WORKER_IPS[@]}"; do
+for ip in "${SLURM_WORKER_IPS[@]}"; do
 	node_name="$(node_name_for "$ip")"
 	node_ip="$(node_ip_for "$ip")"
 	if [[ -z "$node_name" || -z "$node_ip" ]]; then
 		fail "could not determine node name/IP for ${ip}"
 	fi
-	require_ip_address "normal worker node IP for ${ip}" "$node_ip"
-	join_worker "$ip" "$node_name" "$node_ip" false
+	require_ip_address "Slurm-managed worker node IP for ${ip}" "$node_ip"
+	join_worker "$ip" "$node_name" "$node_ip" true
 done
 
 write_kubeconfig
