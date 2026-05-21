@@ -211,6 +211,10 @@ function slurm::install() {
 		helm install "$chartName" oci://ghcr.io/slinkyproject/charts/slurm \
 			--version="$version" --namespace=slurm --create-namespace --wait \
 			--set "nodesets.slinky.enabled=false" \
+			--set "controller.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
+			--set "controller.logfile.image.tag=latest" \
+			--set "nodesets.slinky.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
+			--set "nodesets.slinky.logfile.image.tag=latest" \
 			--set-string $'controller.extraConf=Nodeset=slurm-bridge Feature=slurm-bridge\nPartitionName=slurm-bridge Nodes=slurm-bridge State=UP Default=NO' \
 			--set "controller.extraConfMap.ReconfigFlags=KeepPartInfo"
 	fi

@@ -8,13 +8,11 @@ KUBECTL="${KUBECTL:-kubectl}"
 
 NAMESPACE="${DRANET_IB_TEST_NAMESPACE:-ib-test}"
 DEVICE_CLASS="${DRANET_IB_TEST_DEVICE_CLASS:-dranet-ib}"
-IMAGE="${DRANET_IB_TEST_IMAGE:-ubuntu:24.04}"
+IMAGE="${DRANET_IB_TEST_IMAGE:-public.ecr.aws/docker/library/ubuntu:24.04}"
 INSTALL_TOOLS="${DRANET_IB_TEST_INSTALL_TOOLS:-true}"
 TOOL_PACKAGES="${DRANET_IB_TEST_TOOL_PACKAGES:-iproute2 iputils-ping ibverbs-utils rdma-core perftest coreutils}"
 TOOLS_WAIT_SECONDS="${DRANET_IB_TEST_TOOLS_WAIT_SECONDS:-300}"
 
-NODE_A="${DRANET_IB_TEST_NODE_A:-c-237-157-100-101}"
-NODE_B="${DRANET_IB_TEST_NODE_B:-c-237-157-100-102}"
 POD_A="${DRANET_IB_TEST_POD_A:-ib-a}"
 POD_B="${DRANET_IB_TEST_POD_B:-ib-b}"
 CLAIM_A="${DRANET_IB_TEST_CLAIM_A:-ib-a}"
@@ -45,8 +43,6 @@ Environment overrides:
   DRANET_IB_TEST_NAMESPACE=$NAMESPACE
   DRANET_IB_TEST_IMAGE=$IMAGE
   DRANET_IB_TEST_INSTALL_TOOLS=$INSTALL_TOOLS
-  DRANET_IB_TEST_NODE_A=$NODE_A
-  DRANET_IB_TEST_NODE_B=$NODE_B
   DRANET_IB_TEST_HOST_IFACE=$HOST_IFACE
   DRANET_IB_TEST_POD_IFACE=$POD_IFACE
   DRANET_IB_TEST_IP_A=$IP_A
@@ -181,8 +177,13 @@ spec:
   restartPolicy: Never
   automountServiceAccountToken: false
   terminationGracePeriodSeconds: 0
-  nodeSelector:
-    kubernetes.io/hostname: ${NODE_A}
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: dranet-ib-test
+        topologyKey: kubernetes.io/hostname
   tolerations:
   - operator: Exists
     effect: NoSchedule
@@ -213,8 +214,13 @@ spec:
   restartPolicy: Never
   automountServiceAccountToken: false
   terminationGracePeriodSeconds: 0
-  nodeSelector:
-    kubernetes.io/hostname: ${NODE_B}
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: dranet-ib-test
+        topologyKey: kubernetes.io/hostname
   tolerations:
   - operator: Exists
     effect: NoSchedule

@@ -19,7 +19,7 @@ nodesets:
       volumeMounts: []
     logfile:
       image:
-        repository: docker.io/library/alpine
+        repository: public.ecr.aws/docker/library/alpine
         tag: latest
       resources: {}
     extraConf: Gres=gpu:gpu.example.com:8
