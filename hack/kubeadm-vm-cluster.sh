@@ -22,7 +22,6 @@ CLUSTER_NAME="${CLUSTER_NAME:-slurm-bridge-vm}"
 PARTITION="${PARTITION:-slurm-bridge}"
 CALICO_VERSION="${CALICO_VERSION:-v3.32.0}"
 ENABLE_CONTAINERD_NRI="${ENABLE_CONTAINERD_NRI:-true}"
-YQ_VERSION="${YQ_VERSION:-v4.53.2}"
 RESET=false
 SKIP_CNI=false
 KUBECONFIG_OUT="${KUBECONFIG_OUT:-}"
@@ -367,58 +366,115 @@ net.ipv4.ip_forward                 = 1
 EOF
 sysctl --system >/dev/null
 
-function install_yq() {
-	local arch
-	if command -v yq >/dev/null 2>&1 && yq --version | grep -q "version ${YQ_VERSION}\$"; then
-		return
-	fi
-	case "$(uname -m)" in
-	x86_64 | amd64)
-		arch="amd64"
-		;;
-	aarch64 | arm64)
-		arch="arm64"
-		;;
-	*)
-		echo "unsupported architecture for yq: $(uname -m)" >&2
-		exit 1
-		;;
-	esac
-	curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}"
-	chmod 0755 /usr/local/bin/yq
-}
-
 function configure_containerd() {
 	local config="/etc/containerd/config.toml"
 	local backup
+	local nri_disable="true"
 
 	mkdir -p /etc/containerd
-	if [[ ! -s "$config" ]]; then
-		containerd config default >"$config"
-	fi
-
-	install_yq
-	if ! yq -p toml '.' "$config" >/dev/null; then
-		backup="/etc/containerd/config.toml.invalid.$(date +%Y%m%d%H%M%S).bak"
-		cp "$config" "$backup"
-		echo "containerd config was invalid TOML; saved ${backup} and regenerated it" >&2
-		containerd config default >"$config"
-	fi
-
-	backup="/etc/containerd/config.toml.$(date +%Y%m%d%H%M%S).bak"
-	cp "$config" "$backup"
 	if [[ "$ENABLE_CONTAINERD_NRI" == "true" ]]; then
-		yq -p toml -o toml -i '
-			.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true |
-			.plugins."io.containerd.nri.v1.nri".disable = false |
-			.plugins."io.containerd.nri.v1.nri".disable_connections = false
-		' "$config"
-	else
-		yq -p toml -o toml -i '
-			.plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options.SystemdCgroup = true
-		' "$config"
+		nri_disable="false"
 	fi
-	yq -p toml '.' "$config" >/dev/null
+	if [[ -e "$config" ]]; then
+		backup="/etc/containerd/config.toml.$(date +%Y%m%d%H%M%S).bak"
+		cp "$config" "$backup"
+		echo "saved existing containerd config to ${backup}"
+	fi
+
+	# These VMs are dedicated kubeadm nodes. Render the containerd config
+	# deterministically instead of preserving Docker's CRI-disabled defaults.
+	cat >"$config" <<EOF
+version = 2
+root = "/var/lib/containerd"
+state = "/run/containerd"
+oom_score = 0
+disabled_plugins = []
+required_plugins = []
+
+[grpc]
+  address = "/run/containerd/containerd.sock"
+  gid = 0
+  max_recv_message_size = 16777216
+  max_send_message_size = 16777216
+  uid = 0
+
+[plugins]
+
+  [plugins."io.containerd.grpc.v1.cri"]
+    device_ownership_from_security_context = false
+    disable_apparmor = false
+    disable_cgroup = false
+    disable_hugetlb_controller = true
+    disable_proc_mount = false
+    disable_tcp_service = true
+    enable_selinux = false
+    enable_tls_streaming = false
+    enable_unprivileged_icmp = false
+    enable_unprivileged_ports = false
+    ignore_image_defined_volumes = false
+    max_concurrent_downloads = 3
+    max_container_log_line_size = 16384
+    netns_mounts_under_state_dir = false
+    restrict_oom_score_adj = false
+    sandbox_image = "registry.k8s.io/pause:3.10"
+    selinux_category_range = 1024
+    stats_collect_period = 10
+    stream_idle_timeout = "4h0m0s"
+    stream_server_address = "127.0.0.1"
+    stream_server_port = "0"
+    systemd_cgroup = false
+    tolerate_missing_hugetlb_controller = true
+    unset_seccomp_profile = ""
+
+    [plugins."io.containerd.grpc.v1.cri".cni]
+      bin_dir = "/opt/cni/bin"
+      conf_dir = "/etc/cni/net.d"
+      max_conf_num = 1
+      setup_serially = false
+
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      default_runtime_name = "runc"
+      disable_snapshot_annotations = true
+      discard_unpacked_layers = false
+      ignore_blockio_not_enabled_errors = false
+      ignore_rdt_not_enabled_errors = false
+      no_pivot = false
+      snapshotter = "overlayfs"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+        base_runtime_spec = ""
+        container_annotations = []
+        pod_annotations = []
+        privileged_without_host_devices = false
+        runtime_type = "io.containerd.runc.v2"
+        sandbox_mode = "podsandbox"
+        snapshotter = ""
+
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+          BinaryName = ""
+          CriuImagePath = ""
+          CriuPath = ""
+          CriuWorkPath = ""
+          IoGid = 0
+          IoUid = 0
+          NoNewKeyring = false
+          NoPivotRoot = false
+          Root = ""
+          ShimCgroup = ""
+          SystemdCgroup = true
+
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = ""
+
+  [plugins."io.containerd.nri.v1.nri"]
+    disable = ${nri_disable}
+    disable_connections = false
+    plugin_config_path = "/etc/nri/conf.d"
+    plugin_path = "/opt/nri/plugins"
+    plugin_registration_timeout = "5s"
+    plugin_request_timeout = "2s"
+    socket_path = "/var/run/nri/nri.sock"
+EOF
 }
 
 mkdir -p /etc/containerd
@@ -454,7 +510,7 @@ fi
 REMOTE
 	scp_to_remote "$ip" "$prepare_script" /tmp/kubeadm-vm-prepare.sh
 	rm -f "$prepare_script"
-	remote "$ip" "NODE_INTERFACE='${NODE_INTERFACE}' K8S_VERSION='${K8S_VERSION}' K8S_MINOR='${K8S_MINOR}' ENABLE_CONTAINERD_NRI='${ENABLE_CONTAINERD_NRI}' YQ_VERSION='${YQ_VERSION}' bash /tmp/kubeadm-vm-prepare.sh"
+	remote "$ip" "NODE_INTERFACE='${NODE_INTERFACE}' K8S_VERSION='${K8S_VERSION}' K8S_MINOR='${K8S_MINOR}' ENABLE_CONTAINERD_NRI='${ENABLE_CONTAINERD_NRI}' bash /tmp/kubeadm-vm-prepare.sh"
 }
 
 function reset_node() {
@@ -531,6 +587,9 @@ function join_worker() {
 	local node_ip="$3"
 	local slurm_managed="$4"
 	local join_config
+	local join_command
+	local token
+	local ca_hash
 	local labels="scheduler.slinky.slurm.net/slurm-bridge=worker,scheduler.slinky.slurm.net/external-node=true"
 
 	if remote "$ip" "test -s /etc/kubernetes/kubelet.conf"; then
@@ -579,17 +638,30 @@ EOF
 		scp_to_remote "$ip" "$join_config" /tmp/kubeadm-join.yaml
 		rm -f "$join_config"
 		remote "$ip" "kubeadm join --config /tmp/kubeadm-join.yaml"
+		log "kubeadm join completed for ${node_name}"
 	fi
 
-	remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl wait --for=condition=Ready node/${node_name} --timeout=300s"
+	log "waiting for Kubernetes node object ${node_name}"
+	remote "$CONTROL_PLANE_IP" "for i in \$(seq 1 60); do KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=10s get node '${node_name}' >/dev/null 2>&1 && exit 0; sleep 1; done; KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=10s get node '${node_name}'"
+	log "Kubernetes node object ${node_name} exists"
+}
+
+function apply_node_metadata() {
+	local node_name="$1"
+	local slurm_managed="$2"
+
 	if [[ "$slurm_managed" == "true" ]]; then
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge=worker scheduler.slinky.slurm.net/external-node=true --overwrite"
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint node '${node_name}' slinky.slurm.net/managed-node=slurm-bridge-scheduler:NoExecute --overwrite"
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions='${PARTITION}' --overwrite"
+		log "labeling Slurm-managed node ${node_name}"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge=worker scheduler.slinky.slurm.net/external-node=true --overwrite"
+		log "tainting Slurm-managed node ${node_name}"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s taint node '${node_name}' slinky.slurm.net/managed-node=slurm-bridge-scheduler:NoExecute --overwrite"
+		log "annotating Slurm-managed node ${node_name}"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions='${PARTITION}' --overwrite"
 	else
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint node '${node_name}' slinky.slurm.net/managed-node- || true"
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge- scheduler.slinky.slurm.net/external-node- || true"
-		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions- || true"
+		log "clearing Slurm-managed metadata from untainted worker ${node_name}"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s taint node '${node_name}' slinky.slurm.net/managed-node- || true"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s label node '${node_name}' scheduler.slinky.slurm.net/slurm-bridge- scheduler.slinky.slurm.net/external-node- || true"
+		remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s annotate node '${node_name}' scheduler.slinky.slurm.net/external-node-partitions- || true"
 	fi
 }
 
@@ -614,9 +686,6 @@ for ip in "${all_ips[@]}"; do
 		reset_node "$ip"
 	fi
 	prepare_node "$ip"
-	if $RESET; then
-		reset_node "$ip"
-	fi
 done
 
 CONTROL_PLANE_NODE_NAME="$(node_name_for "$CONTROL_PLANE_IP")"
@@ -648,6 +717,19 @@ for ip in "${SLURM_WORKER_IPS[@]}"; do
 	require_ip_address "Slurm-managed worker node IP for ${ip}" "$node_ip"
 	join_worker "$ip" "$node_name" "$node_ip" true
 done
+
+for ip in "${WORKER_IPS[@]}"; do
+	node_name="$(node_name_for "$ip")"
+	apply_node_metadata "$node_name" false
+done
+
+for ip in "${SLURM_WORKER_IPS[@]}"; do
+	node_name="$(node_name_for "$ip")"
+	apply_node_metadata "$node_name" true
+done
+
+log "waiting for all Kubernetes nodes to become Ready"
+remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --request-timeout=30s wait --for=condition=Ready nodes --all --timeout=600s"
 
 write_kubeconfig
 remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes -o wide"
