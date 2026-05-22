@@ -350,6 +350,33 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 			},
 			want: ptr.To("gres/gpu:gpu.nvidia.com=2"),
 		},
+		{
+			name: "DRANET NIC requested via DRA Extended Resource Claim",
+			args: args{
+				slurmJobIR: &SlurmJobIR{
+					Pods: corev1.PodList{
+						Items: []corev1.Pod{
+							podWithGPU(resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB, "1"),
+						},
+					},
+				},
+			},
+			want: ptr.To("gres/nic:dranet-ib=1"),
+		},
+		{
+			name: "GPU and DRANET NIC requested via DRA Extended Resource Claims",
+			args: args{
+				slurmJobIR: &SlurmJobIR{
+					Pods: corev1.PodList{
+						Items: []corev1.Pod{
+							podWithGPU(resourcev1.ResourceDeviceClassPrefix+"gpu.nvidia.com", "1"),
+							podWithGPU(resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB, "1"),
+						},
+					},
+				},
+			},
+			want: ptr.To("gres/gpu:gpu.nvidia.com=1,gres/nic:dranet-ib=1"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

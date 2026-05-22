@@ -28,6 +28,7 @@ TAINT_KEY="${DRANET_IB_TEST_TAINT_KEY:-slinky.slurm.net/managed-node}"
 TAINT_VALUE="${DRANET_IB_TEST_TAINT_VALUE:-slurm-bridge-scheduler}"
 WAIT_TIMEOUT="${DRANET_IB_TEST_WAIT_TIMEOUT:-180s}"
 BW_DURATION="${DRANET_IB_TEST_BW_DURATION:-10}"
+BW_QPS="${DRANET_IB_TEST_BW_QPS:-4}"
 RUN_BW="${DRANET_IB_TEST_RUN_BW:-true}"
 
 function log() {
@@ -48,6 +49,7 @@ Environment overrides:
   DRANET_IB_TEST_IP_A=$IP_A
   DRANET_IB_TEST_IP_B=$IP_B
   DRANET_IB_TEST_RUN_BW=$RUN_BW
+  DRANET_IB_TEST_BW_QPS=$BW_QPS
 EOF
 }
 
@@ -69,6 +71,15 @@ function ensure_numeric_tools_wait() {
 	case "$TOOLS_WAIT_SECONDS" in
 	"" | *[!0-9]*)
 		echo "DRANET_IB_TEST_TOOLS_WAIT_SECONDS must be an integer number of seconds, got: $TOOLS_WAIT_SECONDS" >&2
+		exit 2
+		;;
+	esac
+}
+
+function ensure_numeric_bw_qps() {
+	case "$BW_QPS" in
+	"" | *[!0-9]*)
+		echo "DRANET_IB_TEST_BW_QPS must be an integer number of QPs, got: $BW_QPS" >&2
 		exit 2
 		;;
 	esac
@@ -336,19 +347,20 @@ function run_bandwidth_test() {
 	local server_timeout server_pid client_rc server_rc
 
 	ensure_numeric_duration
+	ensure_numeric_bw_qps
 	server_timeout=$((BW_DURATION + 30))
 
-	log "Starting ib_write_bw server in ${POD_A}"
+	log "Starting ib_write_bw server in ${POD_A} with ${BW_QPS} QPs"
 	"$KUBECTL" -n "$NAMESPACE" exec "$POD_A" -- sh -c \
-		"rm -f /tmp/ib-write-bw.log; timeout ${server_timeout}s ib_write_bw -F -R --report_gbits -D ${BW_DURATION} >/tmp/ib-write-bw.log 2>&1" &
+		"rm -f /tmp/ib-write-bw.log; timeout ${server_timeout}s ib_write_bw -F -R --report_gbits -D ${BW_DURATION} -q ${BW_QPS} >/tmp/ib-write-bw.log 2>&1" &
 	server_pid=$!
 
 	sleep 3
 
-	log "Running ib_write_bw client from ${POD_B} to ${addr_a}"
+	log "Running ib_write_bw client from ${POD_B} to ${addr_a} with ${BW_QPS} QPs"
 	set +e
 	"$KUBECTL" -n "$NAMESPACE" exec "$POD_B" -- sh -c \
-		"ib_write_bw -F -R --report_gbits -D ${BW_DURATION} ${addr_a}"
+		"ib_write_bw -F -R --report_gbits -D ${BW_DURATION} -q ${BW_QPS} ${addr_a}"
 	client_rc=$?
 	wait "$server_pid"
 	server_rc=$?

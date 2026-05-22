@@ -74,6 +74,10 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 	if err != nil {
 		return nil, nil, err
 	}
+	deviceConfigs, err := nodeInfo.GetDeviceClaimConfigurations(ctx, sb.Client, resources)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	for containerIndex, container := range containers {
 		creqs := container.Resources.Requests
@@ -140,6 +144,7 @@ func (sb *SlurmBridge) createRequestsAndMappings(ctx context.Context, pod *corev
 		Spec: resourcev1.ResourceClaimSpec{
 			Devices: resourcev1.DeviceClaim{
 				Requests: deviceRequests,
+				Config:   deviceConfigs,
 			},
 		},
 	}

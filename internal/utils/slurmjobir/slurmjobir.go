@@ -6,6 +6,7 @@ package slurmjobir
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -146,31 +147,49 @@ func parsePodsCpuAndMemory(slurmJobIR *SlurmJobIR) {
 	}
 }
 
-/* Set GRES for the external job to the maximum quantity of GPUs requested */
+/* Set GRES for the external job to the maximum quantity requested per GRES type. */
 func parseGPUDevicePlugin(slurmJobIR *SlurmJobIR) {
-	var gres string
-	var gresMax resource.Quantity
+	gresRequests := map[string]resource.Quantity{}
 	for _, p := range slurmJobIR.Pods.Items {
 		lim := resourcehelper.PodLimits(&p, resourcehelper.PodResourcesOptions{})
 		for resourceName, quantity := range lim {
-			if resourceName == nvidiaDevicePlugin || resourceName == amdDevicePlugin {
-				if quantity.Cmp(gresMax) > 0 {
-					gresMax = quantity
-					gres = fmt.Sprintf("gres/gpu=%s", quantity.String())
-				}
+			gresName, ok := resourceNameToGres(resourceName)
+			if !ok {
+				continue
 			}
-			if strings.HasPrefix(resourceName.String(), resourcev1.ResourceDeviceClassPrefix) {
-				if quantity.Cmp(gresMax) > 0 {
-					deviceClass := strings.TrimPrefix(string(resourceName), resourcev1.ResourceDeviceClassPrefix)
-					gres = fmt.Sprintf("gres/gpu:%s=%s", deviceClass, quantity.String())
-					gresMax = quantity
-				}
+			if current, ok := gresRequests[gresName]; !ok || quantity.Cmp(current) > 0 {
+				gresRequests[gresName] = quantity
 			}
 		}
 	}
-	if gres != "" {
-		slurmJobIR.JobInfo.Gres = ptr.To(gres)
+	if len(gresRequests) == 0 {
+		return
 	}
+	keys := make([]string, 0, len(gresRequests))
+	for key := range gresRequests {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	gresParts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		quantity := gresRequests[key]
+		gresParts = append(gresParts, fmt.Sprintf("gres/%s=%s", key, quantity.String()))
+	}
+	slurmJobIR.JobInfo.Gres = ptr.To(strings.Join(gresParts, ","))
+}
+
+func resourceNameToGres(resourceName corev1.ResourceName) (string, bool) {
+	if resourceName == nvidiaDevicePlugin || resourceName == amdDevicePlugin {
+		return "gpu", true
+	}
+	if !strings.HasPrefix(resourceName.String(), resourcev1.ResourceDeviceClassPrefix) {
+		return "", false
+	}
+	deviceClass := strings.TrimPrefix(string(resourceName), resourcev1.ResourceDeviceClassPrefix)
+	if deviceClass == wellknown.DraNetDeviceClassIB {
+		return wellknown.SlurmGresNameNIC + ":" + deviceClass, true
+	}
+	return "gpu:" + deviceClass, true
 }
 
 func parseAnnotations(slurmJobIR *SlurmJobIR, anno map[string]string) error {

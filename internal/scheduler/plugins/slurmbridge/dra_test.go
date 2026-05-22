@@ -11,6 +11,7 @@ import (
 	"github.com/SlinkyProject/slurm-bridge/internal/nodeinfo"
 	"github.com/SlinkyProject/slurm-bridge/internal/scheduler/plugins/slurmbridge/slurmcontrol"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils/bitmaputil"
+	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
@@ -304,6 +305,91 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 				t.Errorf("SlurmBridge.createRequestsAndMappings() len(gotClaim.Spec.Devices.Requests) = %v, want %v", len(gotClaim.Spec.Devices.Requests), tt.wantRequests)
 			}
 		})
+	}
+}
+
+func TestSlurmBridge_createRequestsAndMappings_DRANET(t *testing.T) {
+	ctx := context.Background()
+	kclient := fake.NewClientBuilder().
+		WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+		WithObjects(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}},
+			&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: wellknown.DraNetDeviceClassIB}},
+			&resourcev1.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{Name: "node1-dranet"},
+				Spec: resourcev1.ResourceSliceSpec{
+					NodeName: ptr.To("node1"),
+					Driver:   wellknown.DraDriverNet,
+					Pool: resourcev1.ResourcePool{
+						Name: "node1",
+					},
+					Devices: []resourcev1.Device{
+						{
+							Name: "net0",
+							Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
+								nodeinfo.DraDriverNet_IfName:        {StringValue: ptr.To("ib0")},
+								nodeinfo.DraDriverNet_RDMA:          {BoolValue: ptr.To(true)},
+								nodeinfo.DraDriverNet_Encapsulation: {StringValue: ptr.To("infiniband")},
+							},
+						},
+					},
+				},
+			},
+		).
+		Build()
+	sb := &SlurmBridge{Client: kclient}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: metav1.NamespaceDefault,
+			Name:      "foo",
+			UID:       "123",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "foo",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + wellknown.DraNetDeviceClassIB): resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+	resources := &slurmcontrol.NodeResources{
+		Node: "node1",
+		Gres: []slurmcontrol.GresLayout{
+			{
+				Name:  wellknown.SlurmGresNameNIC,
+				Type:  wellknown.DraNetDeviceClassIB,
+				Count: 1,
+				Index: "0",
+			},
+		},
+	}
+
+	claim, mappings, err := sb.createRequestsAndMappings(ctx, pod, "node1", resources)
+	if err != nil {
+		t.Fatalf("createRequestsAndMappings() failed: %v", err)
+	}
+	if len(claim.Spec.Devices.Requests) != 1 {
+		t.Fatalf("requests len = %d, want 1", len(claim.Spec.Devices.Requests))
+	}
+	if claim.Spec.Devices.Requests[0].Name != wellknown.SlurmGresNameNIC {
+		t.Fatalf("request name = %q, want %q", claim.Spec.Devices.Requests[0].Name, wellknown.SlurmGresNameNIC)
+	}
+	if len(claim.Spec.Devices.Config) != 1 || claim.Spec.Devices.Config[0].Opaque == nil {
+		t.Fatalf("config = %#v, want one opaque DRANET config", claim.Spec.Devices.Config)
+	}
+	if string(claim.Spec.Devices.Config[0].Opaque.Parameters.Raw) != `{"interface":{"name":"ib0"}}` {
+		t.Fatalf("config raw = %s", string(claim.Spec.Devices.Config[0].Opaque.Parameters.Raw))
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("mappings len = %d, want 1", len(mappings))
+	}
+	if mappings[0].ResourceName != resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB {
+		t.Fatalf("mapping resource = %q, want %q", mappings[0].ResourceName, resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB)
 	}
 }
 
