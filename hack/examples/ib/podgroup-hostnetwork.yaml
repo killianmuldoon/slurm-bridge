@@ -1,0 +1,168 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slurm-bridge
+  labels:
+    slurm-bridge.slinky.slurm.net/managed: "true"
+---
+apiVersion: scheduling.x-k8s.io/v1alpha1
+kind: PodGroup
+metadata:
+  name: ib-hostnetwork
+  namespace: slurm-bridge
+  annotations:
+    slurmjob.slinky.slurm.net/job-name: ib-hostnetwork
+    slurmjob.slinky.slurm.net/timelimit: "30"
+spec:
+  minMember: 2
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ib-hostnetwork-a
+  namespace: slurm-bridge
+  labels:
+    app.kubernetes.io/name: slurm-bridge-ib-test
+    app.kubernetes.io/instance: ib-hostnetwork
+    app.kubernetes.io/component: endpoint
+    ib-test.slinky.slurm.net/endpoint: a
+    scheduling.x-k8s.io/pod-group: ib-hostnetwork
+spec:
+  schedulerName: slurm-bridge-scheduler
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  nodeSelector:
+    scheduler.slinky.slurm.net/slurm-bridge: worker
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: slurm-bridge-ib-test
+              app.kubernetes.io/instance: ib-hostnetwork
+          topologyKey: kubernetes.io/hostname
+  tolerations:
+    - key: slinky.slurm.net/managed-node
+      operator: Equal
+      value: slurm-bridge-scheduler
+      effect: NoExecute
+  containers:
+    - name: tools
+      image: public.ecr.aws/docker/library/ubuntu:24.04
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: IB_INTERFACE
+          value: ib1
+        - name: IB_IP
+          value: 10.200.1.101/24
+        - name: IB_PEER_IP
+          value: 10.200.1.102
+        - name: RDMA_DEVICE
+          value: mlx5_1
+      securityContext:
+        privileged: true
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends iproute2 iputils-ping ibverbs-utils rdma-core perftest infiniband-diags coreutils
+          ip link show "$IB_INTERFACE"
+          test -e "/sys/class/infiniband/$RDMA_DEVICE"
+          touch /tmp/rdma-tools-ready
+          sleep infinity
+      readinessProbe:
+        exec:
+          command:
+            - test
+            - -e
+            - /tmp/rdma-tools-ready
+        periodSeconds: 2
+        failureThreshold: 3
+      resources:
+        requests:
+          cpu: "1"
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ib-hostnetwork-b
+  namespace: slurm-bridge
+  labels:
+    app.kubernetes.io/name: slurm-bridge-ib-test
+    app.kubernetes.io/instance: ib-hostnetwork
+    app.kubernetes.io/component: endpoint
+    ib-test.slinky.slurm.net/endpoint: b
+    scheduling.x-k8s.io/pod-group: ib-hostnetwork
+spec:
+  schedulerName: slurm-bridge-scheduler
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  nodeSelector:
+    scheduler.slinky.slurm.net/slurm-bridge: worker
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: slurm-bridge-ib-test
+              app.kubernetes.io/instance: ib-hostnetwork
+          topologyKey: kubernetes.io/hostname
+  tolerations:
+    - key: slinky.slurm.net/managed-node
+      operator: Equal
+      value: slurm-bridge-scheduler
+      effect: NoExecute
+  containers:
+    - name: tools
+      image: public.ecr.aws/docker/library/ubuntu:24.04
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: IB_INTERFACE
+          value: ib1
+        - name: IB_IP
+          value: 10.200.1.102/24
+        - name: IB_PEER_IP
+          value: 10.200.1.101
+        - name: RDMA_DEVICE
+          value: mlx5_1
+      securityContext:
+        privileged: true
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends iproute2 iputils-ping ibverbs-utils rdma-core perftest infiniband-diags coreutils
+          ip link show "$IB_INTERFACE"
+          test -e "/sys/class/infiniband/$RDMA_DEVICE"
+          touch /tmp/rdma-tools-ready
+          sleep infinity
+      readinessProbe:
+        exec:
+          command:
+            - test
+            - -e
+            - /tmp/rdma-tools-ready
+        periodSeconds: 2
+        failureThreshold: 3
+      resources:
+        requests:
+          cpu: "1"
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
