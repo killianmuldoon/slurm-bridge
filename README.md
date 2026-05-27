@@ -86,7 +86,7 @@ Create a secret for slurm-bridge to communicate with Slurm.
 
 ```sh
 export SLURM_JWT=$(scontrol token username=slurm lifespan=infinite)
-kubectl create namespace slurm-bridge
+kubectl create namespace slurm-bridge --dry-run=client -o yaml | kubectl apply -f -
 kubectl create secret generic slurm-bridge-jwt-token --namespace=slinky --from-literal="auth-token=$SLURM_JWT" --type=Opaque
 ```
 

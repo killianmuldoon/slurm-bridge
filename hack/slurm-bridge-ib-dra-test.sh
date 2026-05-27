@@ -236,6 +236,9 @@ function show_status() {
 	"$KUBECTL" -n "$NAMESPACE" get pods \
 		-l "app.kubernetes.io/name=slurm-bridge-ib-dra-test,app.kubernetes.io/instance=${PODGROUP}" \
 		-o wide --show-labels
+	"$KUBECTL" -n "$NAMESPACE" get pods \
+		-l "app.kubernetes.io/name=slurm-bridge-ib-dra-test,app.kubernetes.io/instance=${PODGROUP}" \
+		-o custom-columns='NAME:.metadata.name,JOBID:.metadata.labels.scheduler\.slinky\.slurm\.net/slurm-jobid,SLURM_NODE:.metadata.annotations.slinky\.slurm\.net/slurm-node,NODE:.spec.nodeName,PHASE:.status.phase' || true
 	"$KUBECTL" -n "$NAMESPACE" get resourceclaims -o wide || true
 	"$KUBECTL" get deviceclass "$DEVICE_CLASS" -o wide || true
 }

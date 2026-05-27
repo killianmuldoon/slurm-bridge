@@ -24,11 +24,11 @@
     DRANET Shape
   I would add a DRANET mapper that makes network devices look like Slurm GRES:
 
-  Slurm GRES name: nic
+  Slurm GRES name: dranet
   Slurm GRES type: <network DeviceClass or configured class>
   Examples:
-    nic:dranet-ib:8
-    nic:efa.networking.k8s.aws:4
+    dranet:dranet-ib:8
+    dranet:efa.networking.k8s.aws:4
 
   A pod would request:
 
@@ -40,7 +40,7 @@
 
   slurm-bridge would submit:
 
-    TresPerNode=gres/nic:dranet-ib=1
+    TresPerNode=gres/dranet:dranet-ib=1
 
   Then after Slurm allocates a concrete NIC index, slurm-bridge generates:
 

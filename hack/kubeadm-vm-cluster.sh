@@ -22,6 +22,7 @@ CLUSTER_NAME="${CLUSTER_NAME:-slurm-bridge-vm}"
 PARTITION="${PARTITION:-slurm-bridge}"
 CALICO_VERSION="${CALICO_VERSION:-v3.32.0}"
 ENABLE_CONTAINERD_NRI="${ENABLE_CONTAINERD_NRI:-true}"
+K8S_FEATURE_GATES="${K8S_FEATURE_GATES:-DynamicResourceAllocation=true,DRAExtendedResource=true,DRAResourceClaimDeviceStatus=true,DRAConsumableCapacity=true}"
 RESET=false
 SKIP_CNI=false
 KUBECONFIG_OUT="${KUBECONFIG_OUT:-}"
@@ -58,6 +59,7 @@ Options:
   --skip-cni              Do not install Calico.
   --disable-containerd-nri
                           Do not enable containerd NRI during node preparation.
+  --feature-gates GATES   Kubernetes component feature gates. Default: ${K8S_FEATURE_GATES}
   --reset                 Run kubeadm reset and clear CNI state before init/join.
   -h, --help              Show this help.
 
@@ -179,6 +181,14 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--disable-containerd-nri)
 		ENABLE_CONTAINERD_NRI=false
+		shift
+		;;
+	--feature-gates)
+		K8S_FEATURE_GATES="$2"
+		shift 2
+		;;
+	--feature-gates=*)
+		K8S_FEATURE_GATES="${1#*=}"
 		shift
 		;;
 	--reset)
@@ -544,6 +554,8 @@ nodeRegistration:
   kubeletExtraArgs:
     - name: "node-ip"
       value: "${cp_node_ip}"
+    - name: "feature-gates"
+      value: "${K8S_FEATURE_GATES}"
 ---
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: ClusterConfiguration
@@ -559,6 +571,17 @@ apiServer:
     - "${cp_node_ip}"
     - "${CONTROL_PLANE_IP}"
     - "${cp_name}"
+  extraArgs:
+    - name: "feature-gates"
+      value: "${K8S_FEATURE_GATES}"
+controllerManager:
+  extraArgs:
+    - name: "feature-gates"
+      value: "${K8S_FEATURE_GATES}"
+scheduler:
+  extraArgs:
+    - name: "feature-gates"
+      value: "${K8S_FEATURE_GATES}"
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
@@ -628,6 +651,8 @@ EOF
   kubeletExtraArgs:
     - name: "node-ip"
       value: "${node_ip}"
+    - name: "feature-gates"
+      value: "${K8S_FEATURE_GATES}"
 EOF
 		if [[ "$slurm_managed" == "true" ]]; then
 			cat >>"$join_config" <<EOF

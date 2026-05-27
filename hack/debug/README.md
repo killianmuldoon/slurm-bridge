@@ -9,6 +9,17 @@ Run it with:
 make debug
 ```
 
+When the Kubernetes node architecture differs from the host architecture, pass
+`DEBUG_GOARCH`. For example, from an arm64 Mac targeting amd64 kind nodes:
+
+```sh
+DEBUG_GOARCH=amd64 make debug
+```
+
+`DEBUG_GOARCH` is passed to the live-reload build hooks. If it is unset, the
+hooks try to detect the architecture from the current Kubernetes context and
+fall back to the host Go architecture.
+
 The debug Skaffold profile builds the `scheduler-debug`, `controllers-debug`,
 and `admission-debug` Docker targets. Those images run `/dlv-reload-wrapper` as
 PID 1 instead of starting the component binary directly.

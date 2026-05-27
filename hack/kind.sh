@@ -130,6 +130,12 @@ function local-path::install() {
 	fi
 }
 
+function kube::ensure_namespace() {
+	local namespace="$1"
+
+	kubectl create namespace "$namespace" --dry-run=client -o yaml | kubectl apply -f -
+}
+
 function slurm-bridge::install() {
 	slurm-bridge::prerequisites
 	echo "[slurm-bridge] Running skaffold (build and deploy slurm-bridge)..."
@@ -172,7 +178,7 @@ function slurm-bridge::prerequisites() {
 	slurm::install
 	echo "[slurm-bridge] Creating slurm-bridge secret and namespace..."
 	slurm-bridge::secret
-	kubectl create namespace slurm-bridge || true
+	kube::ensure_namespace slurm-bridge
 }
 
 function slurm::prerequisites() {
@@ -207,17 +213,22 @@ function slurm::install() {
 	sleep 5
 
 	chartName="slurm"
-	if ! helm::find "$chartName"; then
-		helm install "$chartName" oci://ghcr.io/slinkyproject/charts/slurm \
-			--version="$version" --namespace=slurm --create-namespace --wait \
-			--set "nodesets.slinky.enabled=false" \
-			--set "controller.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
-			--set "controller.logfile.image.tag=latest" \
-			--set "nodesets.slinky.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
-			--set "nodesets.slinky.logfile.image.tag=latest" \
-			--set-string $'controller.extraConf=Nodeset=slurm-bridge Feature=slurm-bridge\nPartitionName=slurm-bridge Nodes=slurm-bridge State=UP Default=NO' \
-			--set "controller.extraConfMap.ReconfigFlags=KeepPartInfo"
-	fi
+	local controller_extra_conf
+	controller_extra_conf="$(mktemp)"
+	printf '%s\n' \
+		'GresTypes=gpu,dranet' \
+		'Nodeset=slurm-bridge Feature=slurm-bridge' \
+		'PartitionName=slurm-bridge Nodes=slurm-bridge State=UP Default=NO' >"$controller_extra_conf"
+	helm upgrade --install "$chartName" oci://ghcr.io/slinkyproject/charts/slurm \
+		--version="$version" --namespace=slurm --create-namespace --wait \
+		--set "nodesets.slinky.enabled=false" \
+		--set "controller.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
+		--set "controller.logfile.image.tag=latest" \
+		--set "nodesets.slinky.logfile.image.repository=public.ecr.aws/docker/library/alpine" \
+		--set "nodesets.slinky.logfile.image.tag=latest" \
+		--set-file "controller.extraConf=$controller_extra_conf" \
+		--set "controller.extraConfMap.ReconfigFlags=KeepPartInfo"
+	rm -f "$controller_extra_conf"
 }
 
 function extras::install() {
@@ -263,7 +274,7 @@ function kjob::install() {
 		make kubectl-kjob
 		cp "./bin/kubectl-kjob" "$SCRIPT_DIR/kubectl-kjob"
 	)
-	kubectl create namespace slurm-bridge || true
+	kube::ensure_namespace slurm-bridge
 	kubectl apply -f "${SCRIPT_DIR}"/kjob.yaml
 	echo -e "\nRun the following command to install the kubectl kjob plugin:"
 	echo -e "sudo cp ${SCRIPT_DIR}/kubectl-kjob /usr/local/bin/kubectl-kjob\n"
