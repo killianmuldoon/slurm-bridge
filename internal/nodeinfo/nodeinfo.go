@@ -40,6 +40,10 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 	}
 
 	if hasDeviceClass(ctx, kubeclient, DraDriverCpu) {
+		cpuRequestName := resources.CPURequestName
+		if cpuRequestName == "" {
+			cpuRequestName = corev1.ResourceCPU.String()
+		}
 		bitmap, err := bitmaputil.NewFrom(resources.CoreBitmap)
 		if err != nil {
 			return nil, err
@@ -47,7 +51,7 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 		cpuSet := n.CpuMap.ToMachineCPUs(bitmap)
 		cpuSetString := strings.ReplaceAll(fmt.Sprint(cpuSet.List()), " ", ",")
 		req := resourcev1.DeviceRequest{
-			Name: corev1.ResourceCPU.String(),
+			Name: cpuRequestName,
 			Exactly: &resourcev1.ExactDeviceRequest{
 				DeviceClassName: DraDriverCpu,
 				AllocationMode:  resourcev1.DeviceAllocationModeExactCount,
@@ -110,6 +114,9 @@ func (n *NodeInfo) GetDeviceRequests(ctx context.Context, kubeclient client.Clie
 		default:
 			continue
 		}
+		if celExpr == "" {
+			continue
+		}
 		req := resourcev1.DeviceRequest{
 			Name: gres.Name,
 			Exactly: &resourcev1.ExactDeviceRequest{
@@ -154,7 +161,10 @@ func (n *NodeInfo) GetDeviceClaimConfigurations(ctx context.Context, kubeclient 
 			continue
 		}
 		if len(indexList) > 1 || gres.Count > 1 {
-			return nil, fmt.Errorf("DRANET claim config currently supports one %s device per request, got count=%d index=%q", wellknown.SlurmGresNameNIC, gres.Count, gres.Index)
+			// DRANET's opaque interface config is scoped to the DRA request, not
+			// to each individual allocated device. For multi-device requests,
+			// omit config so DRANET keeps each selected host interface name.
+			continue
 		}
 		index, err := strconv.Atoi(indexList[0])
 		if err != nil {
@@ -196,6 +206,10 @@ func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubecli
 	}
 
 	if hasDeviceClass(ctx, kubeclient, DraDriverCpu) {
+		cpuRequestName := resources.CPURequestName
+		if cpuRequestName == "" {
+			cpuRequestName = corev1.ResourceCPU.String()
+		}
 		bitmap, err := bitmaputil.NewFrom(resources.CoreBitmap)
 		if err != nil {
 			return nil, err
@@ -208,7 +222,7 @@ func (n *NodeInfo) GetDeviceRequestAllocationResult(ctx context.Context, kubecli
 				continue
 			}
 			dev := resourcev1.DeviceRequestAllocationResult{
-				Request: corev1.ResourceCPU.String(),
+				Request: cpuRequestName,
 				Driver:  DraDriverCpu,
 				Pool:    resources.Node,
 				Device:  cpuInfo.Name,
@@ -308,7 +322,8 @@ func NewNodeInfo(ctx context.Context, kubeclient client.Client, nodeName string)
 }
 
 // GetGresAndGresConf returns Slurm GRES and GresConf strings for this node's devices.
-// GRES and GresConf are derived from DRA ResourceSlices (e.g. GPU and NIC devices); CPU is not included.
+// GRES is derived from DRA ResourceSlices; CPU is not included.
+// GresConf uses Slurm's dynamic node syntax where records are separated with "+".
 // Returns ("", "") when the node has no GRES devices.
 func (n *NodeInfo) GetGresAndGresConf() (gres, gresConf string) {
 	gresParts := []string{}
@@ -329,11 +344,11 @@ func (n *NodeInfo) GetGresAndGresConf() (gres, gresConf string) {
 		if len(netMap.NetInfoMap) == 0 {
 			continue
 		}
-		gresParts = append(gresParts, fmt.Sprintf("%s:%s:%d", wellknown.SlurmGresNameNIC, deviceClass, len(netMap.NetInfoMap)))
-		gresConfParts = append(gresConfParts, formatGresConf(wellknown.SlurmGresNameNIC, deviceClass, netDeviceFiles(netMap)))
+		gresParts = append(gresParts, fmt.Sprintf("%s:%s:%d", wellknown.SlurmGresNameDRANet, deviceClass, len(netMap.NetInfoMap)))
+		gresConfParts = append(gresConfParts, formatGresConf(wellknown.SlurmGresNameDRANet, deviceClass, netDeviceFiles(netMap)))
 	}
 
-	return strings.Join(gresParts, ","), strings.Join(gresConfParts, ";")
+	return strings.Join(gresParts, ","), strings.Join(gresConfParts, "+")
 }
 
 func gpuDeviceFiles(gpuMap GPUMap) []string {

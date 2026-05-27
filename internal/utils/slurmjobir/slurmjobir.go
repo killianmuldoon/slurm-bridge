@@ -187,7 +187,7 @@ func resourceNameToGres(resourceName corev1.ResourceName) (string, bool) {
 	}
 	deviceClass := strings.TrimPrefix(string(resourceName), resourcev1.ResourceDeviceClassPrefix)
 	if deviceClass == wellknown.DraNetDeviceClassIB {
-		return wellknown.SlurmGresNameNIC + ":" + deviceClass, true
+		return wellknown.SlurmGresNameDRANet + ":" + deviceClass, true
 	}
 	return "gpu:" + deviceClass, true
 }

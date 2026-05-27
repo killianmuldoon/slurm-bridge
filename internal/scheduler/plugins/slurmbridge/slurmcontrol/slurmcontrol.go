@@ -50,6 +50,7 @@ type NodeResources struct {
 	CoresPerSocket int32
 	MemAlloc       int64
 	CoreBitmap     string
+	CPURequestName string
 	Channel        int32
 	Gres           []GresLayout
 }

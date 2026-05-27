@@ -311,7 +311,7 @@ func TestNodeInfo_GetDeviceRequests(t *testing.T) {
 				Node: "node",
 				Gres: []slurmcontrol.GresLayout{
 					{
-						Name:  wellknown.SlurmGresNameNIC,
+						Name:  wellknown.SlurmGresNameDRANet,
 						Type:  wellknown.DraNetDeviceClassIB,
 						Count: 1,
 						Index: "0",
@@ -320,7 +320,7 @@ func TestNodeInfo_GetDeviceRequests(t *testing.T) {
 			},
 			want: []resourcev1.DeviceRequest{
 				{
-					Name: wellknown.SlurmGresNameNIC,
+					Name: wellknown.SlurmGresNameDRANet,
 					Exactly: &resourcev1.ExactDeviceRequest{
 						DeviceClassName: wellknown.DraNetDeviceClassIB,
 						AllocationMode:  resourcev1.DeviceAllocationModeExactCount,
@@ -493,7 +493,7 @@ func TestNodeInfo_GetDeviceClaimConfigurations(t *testing.T) {
 		Node: "node",
 		Gres: []slurmcontrol.GresLayout{
 			{
-				Name:  wellknown.SlurmGresNameNIC,
+				Name:  wellknown.SlurmGresNameDRANet,
 				Type:  wellknown.DraNetDeviceClassIB,
 				Count: 1,
 				Index: "0",
@@ -515,6 +515,39 @@ func TestNodeInfo_GetDeviceClaimConfigurations(t *testing.T) {
 	}
 	if string(got[0].Opaque.Parameters.Raw) != `{"interface":{"name":"ib0"}}` {
 		t.Fatalf("GetDeviceClaimConfigurations() raw = %s", string(got[0].Opaque.Parameters.Raw))
+	}
+}
+
+func TestNodeInfo_GetDeviceClaimConfigurations_MultiDRANETDeviceOmitsConfig(t *testing.T) {
+	kubeclient := fake.NewClientBuilder().
+		WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+		WithObjects(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}},
+			&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: wellknown.DraNetDeviceClassIB}},
+			dranetIBResourceSlice("node"),
+		).
+		Build()
+	n, err := nodeinfo.NewNodeInfo(context.Background(), kubeclient, "node")
+	if err != nil {
+		t.Fatalf("NewNodeInfo() failed: %v", err)
+	}
+	resources := &slurmcontrol.NodeResources{
+		Node: "node",
+		Gres: []slurmcontrol.GresLayout{
+			{
+				Name:  wellknown.SlurmGresNameDRANet,
+				Type:  wellknown.DraNetDeviceClassIB,
+				Count: 2,
+				Index: "0,1",
+			},
+		},
+	}
+	got, err := n.GetDeviceClaimConfigurations(context.Background(), kubeclient, resources)
+	if err != nil {
+		t.Fatalf("GetDeviceClaimConfigurations() failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("GetDeviceClaimConfigurations() len = %d, want 0", len(got))
 	}
 }
 
@@ -715,7 +748,7 @@ func TestNodeInfo_GetDeviceRequestAllocationResult(t *testing.T) {
 				Node: "node",
 				Gres: []slurmcontrol.GresLayout{
 					{
-						Name:  wellknown.SlurmGresNameNIC,
+						Name:  wellknown.SlurmGresNameDRANet,
 						Type:  wellknown.DraNetDeviceClassIB,
 						Count: 1,
 						Index: "1",
@@ -723,7 +756,7 @@ func TestNodeInfo_GetDeviceRequestAllocationResult(t *testing.T) {
 				},
 			},
 			want: []resourcev1.DeviceRequestAllocationResult{
-				{Request: wellknown.SlurmGresNameNIC, Driver: wellknown.DraDriverNet, Device: "net-a", Pool: "node"},
+				{Request: wellknown.SlurmGresNameDRANet, Driver: wellknown.DraDriverNet, Device: "net-a", Pool: "node"},
 			},
 		},
 	}
@@ -810,8 +843,36 @@ func TestNodeInfo_GetGresAndGresConf(t *testing.T) {
 				).
 				Build(),
 			nodeName: "node",
-			wantGres: wellknown.SlurmGresNameNIC + ":" + wellknown.DraNetDeviceClassIB + ":2",
-			wantConf: "count=2,name=nic,type=dranet-ib,file=ib0,file=ib1",
+			wantGres: wellknown.SlurmGresNameDRANet + ":" + wellknown.DraNetDeviceClassIB + ":2",
+			wantConf: "count=2,name=dranet,type=dranet-ib,file=ib0,file=ib1",
+		},
+		{
+			name: "example GPU and dranet ib devices",
+			kubeclient: fake.NewClientBuilder().
+				WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+				WithObjects(
+					&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}},
+					dranetIBResourceSlice("node"),
+					&resourcev1.ResourceSlice{
+						ObjectMeta: metav1.ObjectMeta{Name: "node-gpu"},
+						Spec: resourcev1.ResourceSliceSpec{
+							NodeName: ptr.To("node"),
+							Driver:   nodeinfo.DraExampleDriver,
+							Devices: []resourcev1.Device{
+								{
+									Name: "gpu-0",
+									Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
+										nodeinfo.DraExampleDriver_Index: {IntValue: ptr.To[int64](0)},
+									},
+								},
+							},
+						},
+					},
+				).
+				Build(),
+			nodeName: "node",
+			wantGres: "gpu:gpu.example.com:1," + wellknown.SlurmGresNameDRANet + ":" + wellknown.DraNetDeviceClassIB + ":2",
+			wantConf: "count=1,name=gpu,type=gpu.example.com,file=gpu-0+count=2,name=dranet,type=dranet-ib,file=ib0,file=ib1",
 		},
 		{
 			name: "example driver with single GPU",

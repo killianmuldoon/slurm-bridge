@@ -361,7 +361,7 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 					},
 				},
 			},
-			want: ptr.To("gres/nic:dranet-ib=1"),
+			want: ptr.To("gres/dranet:dranet-ib=1"),
 		},
 		{
 			name: "GPU and DRANET NIC requested via DRA Extended Resource Claims",
@@ -375,7 +375,7 @@ func Test_parseGPUDevicePlugin(t *testing.T) {
 					},
 				},
 			},
-			want: ptr.To("gres/gpu:gpu.nvidia.com=1,gres/nic:dranet-ib=1"),
+			want: ptr.To("gres/dranet:dranet-ib=1,gres/gpu:gpu.nvidia.com=1"),
 		},
 	}
 	for _, tt := range tests {

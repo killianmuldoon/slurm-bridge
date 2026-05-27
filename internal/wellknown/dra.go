@@ -11,6 +11,10 @@ const (
 	// InfiniBand/RDMA network devices managed by DRANET.
 	DraNetDeviceClassIB = "dranet-ib"
 
-	// SlurmGresNameNIC is the Slurm GRES name used for network devices.
-	SlurmGresNameNIC = "nic"
+	// SlurmGresNameDRANet is the Slurm GRES name used for DRANET devices.
+	//
+	// This intentionally avoids Slurm's built-in "nic" GRES plugin. The native
+	// plugin has NIC-specific device-file semantics that do not match DRANET's
+	// Kubernetes DRA interface names.
+	SlurmGresNameDRANet = "dranet"
 )

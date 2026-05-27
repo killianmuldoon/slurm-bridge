@@ -6,6 +6,7 @@ package slurmbridge
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/SlinkyProject/slurm-bridge/internal/nodeinfo"
@@ -141,6 +142,7 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 					},
 				},
 			},
+			wantErr: true,
 		},
 		{
 			name: "Matching device class name",
@@ -296,9 +298,15 @@ func TestSlurmBridge_createRequestsAndMappings(t *testing.T) {
 				slurmControl:  tt.fields.slurmControl,
 				handle:        tt.fields.handle,
 			}
-			gotClaim, _, err := sb.createRequestsAndMappings(tt.args.ctx, tt.args.pod, tt.args.nodeName, tt.args.resources)
+			gotClaim, _, _, err := sb.createRequestsAndMappings(tt.args.ctx, tt.args.pod, tt.args.nodeName, tt.args.resources)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if gotClaim == nil {
+				if tt.wantRequests != 0 {
+					t.Fatalf("SlurmBridge.createRequestsAndMappings() returned nil claim, want %d requests", tt.wantRequests)
+				}
 				return
 			}
 			if len(gotClaim.Spec.Devices.Requests) != tt.wantRequests {
@@ -361,26 +369,35 @@ func TestSlurmBridge_createRequestsAndMappings_DRANET(t *testing.T) {
 		Node: "node1",
 		Gres: []slurmcontrol.GresLayout{
 			{
-				Name:  wellknown.SlurmGresNameNIC,
+				Name:  "gpu",
+				Type:  nodeinfo.DraExampleDriver,
+				Count: 4,
+				Index: "0-3",
+			},
+			{
+				Name:  wellknown.SlurmGresNameDRANet,
 				Type:  wellknown.DraNetDeviceClassIB,
-				Count: 1,
-				Index: "0",
+				Count: 2,
+				Index: "0-1",
 			},
 		},
 	}
 
-	claim, mappings, err := sb.createRequestsAndMappings(ctx, pod, "node1", resources)
+	claim, mappings, claimResources, err := sb.createRequestsAndMappings(ctx, pod, "node1", resources)
 	if err != nil {
 		t.Fatalf("createRequestsAndMappings() failed: %v", err)
 	}
 	if len(claim.Spec.Devices.Requests) != 1 {
 		t.Fatalf("requests len = %d, want 1", len(claim.Spec.Devices.Requests))
 	}
-	if claim.Spec.Devices.Requests[0].Name != wellknown.SlurmGresNameNIC {
-		t.Fatalf("request name = %q, want %q", claim.Spec.Devices.Requests[0].Name, wellknown.SlurmGresNameNIC)
+	if claim.Spec.Devices.Requests[0].Name != "container-0-request-0" {
+		t.Fatalf("request name = %q, want %q", claim.Spec.Devices.Requests[0].Name, "container-0-request-0")
 	}
 	if len(claim.Spec.Devices.Config) != 1 || claim.Spec.Devices.Config[0].Opaque == nil {
 		t.Fatalf("config = %#v, want one opaque DRANET config", claim.Spec.Devices.Config)
+	}
+	if len(claim.Spec.Devices.Config[0].Requests) != 1 || claim.Spec.Devices.Config[0].Requests[0] != "container-0-request-0" {
+		t.Fatalf("config requests = %v, want [container-0-request-0]", claim.Spec.Devices.Config[0].Requests)
 	}
 	if string(claim.Spec.Devices.Config[0].Opaque.Parameters.Raw) != `{"interface":{"name":"ib0"}}` {
 		t.Fatalf("config raw = %s", string(claim.Spec.Devices.Config[0].Opaque.Parameters.Raw))
@@ -388,8 +405,135 @@ func TestSlurmBridge_createRequestsAndMappings_DRANET(t *testing.T) {
 	if len(mappings) != 1 {
 		t.Fatalf("mappings len = %d, want 1", len(mappings))
 	}
+	if len(claimResources.Gres) != 1 {
+		t.Fatalf("claim resources GRES len = %d, want 1", len(claimResources.Gres))
+	}
+	if claimResources.Gres[0].Name != mappings[0].RequestName {
+		t.Fatalf("claim resource name = %q, want mapping request name %q", claimResources.Gres[0].Name, mappings[0].RequestName)
+	}
+	if claimResources.Gres[0].Count != 1 || claimResources.Gres[0].Index != "0" {
+		t.Fatalf("claim resource GRES = %#v, want count=1 index=0", claimResources.Gres[0])
+	}
 	if mappings[0].ResourceName != resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB {
 		t.Fatalf("mapping resource = %q, want %q", mappings[0].ResourceName, resourcev1.ResourceDeviceClassPrefix+wellknown.DraNetDeviceClassIB)
+	}
+}
+
+func TestSlurmBridge_createRequestsAndMappings_DRANETMultiDevice(t *testing.T) {
+	ctx := context.Background()
+	kclient := fake.NewClientBuilder().
+		WithIndex(&resourcev1.ResourceSlice{}, "spec.nodeName", resourceSliceNodeIndex).
+		WithObjects(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node1"}},
+			&resourcev1.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: wellknown.DraNetDeviceClassIB}},
+			&resourcev1.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{Name: "node1-dranet"},
+				Spec: resourcev1.ResourceSliceSpec{
+					NodeName: ptr.To("node1"),
+					Driver:   wellknown.DraDriverNet,
+					Pool: resourcev1.ResourcePool{
+						Name: "node1",
+					},
+					Devices: []resourcev1.Device{
+						{
+							Name: "net0",
+							Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
+								nodeinfo.DraDriverNet_IfName:        {StringValue: ptr.To("ib0")},
+								nodeinfo.DraDriverNet_RDMA:          {BoolValue: ptr.To(true)},
+								nodeinfo.DraDriverNet_Encapsulation: {StringValue: ptr.To("infiniband")},
+							},
+						},
+						{
+							Name: "net1",
+							Attributes: map[resourcev1.QualifiedName]resourcev1.DeviceAttribute{
+								nodeinfo.DraDriverNet_IfName:        {StringValue: ptr.To("ib1")},
+								nodeinfo.DraDriverNet_RDMA:          {BoolValue: ptr.To(true)},
+								nodeinfo.DraDriverNet_Encapsulation: {StringValue: ptr.To("infiniband")},
+							},
+						},
+					},
+				},
+			},
+		).
+		Build()
+	sb := &SlurmBridge{Client: kclient}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: metav1.NamespaceDefault,
+			Name:      "foo",
+			UID:       "123",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "foo",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + wellknown.DraNetDeviceClassIB): resource.MustParse("2"),
+						},
+					},
+				},
+			},
+		},
+	}
+	resources := &slurmcontrol.NodeResources{
+		Node: "node1",
+		Gres: []slurmcontrol.GresLayout{
+			{
+				Name:  wellknown.SlurmGresNameDRANet,
+				Type:  wellknown.DraNetDeviceClassIB,
+				Count: 2,
+				Index: "0,1",
+			},
+		},
+	}
+
+	claim, mappings, claimResources, err := sb.createRequestsAndMappings(ctx, pod, "node1", resources)
+	if err != nil {
+		t.Fatalf("createRequestsAndMappings() failed: %v", err)
+	}
+	if len(claim.Spec.Devices.Requests) != 1 {
+		t.Fatalf("requests len = %d, want 1", len(claim.Spec.Devices.Requests))
+	}
+	request := claim.Spec.Devices.Requests[0]
+	if request.Exactly == nil || request.Exactly.Count != 2 {
+		t.Fatalf("request = %#v, want exact count 2", request)
+	}
+	if len(request.Exactly.Selectors) != 1 || request.Exactly.Selectors[0].CEL == nil {
+		t.Fatalf("request selectors = %#v, want one CEL selector", request.Exactly.Selectors)
+	}
+	if request.Exactly.Selectors[0].CEL.Expression != "device.attributes['dra.net'].ifName in ['ib0','ib1']" {
+		t.Fatalf("request CEL = %q", request.Exactly.Selectors[0].CEL.Expression)
+	}
+	if len(claim.Spec.Devices.Config) != 0 {
+		t.Fatalf("config = %#v, want no opaque DRANET config for multi-device request", claim.Spec.Devices.Config)
+	}
+	if len(mappings) != 1 {
+		t.Fatalf("mappings len = %d, want 1", len(mappings))
+	}
+	if len(claimResources.Gres) != 1 {
+		t.Fatalf("claim resources GRES len = %d, want 1", len(claimResources.Gres))
+	}
+	if claimResources.Gres[0].Count != 2 || claimResources.Gres[0].Index != "0,1" {
+		t.Fatalf("claim resource GRES = %#v, want count=2 index=0,1", claimResources.Gres[0])
+	}
+}
+
+func TestGetGresCursorRequiresConcreteIndex(t *testing.T) {
+	_, err := getGresCursor(map[string]*gresCursor{}, &slurmcontrol.NodeResources{
+		Gres: []slurmcontrol.GresLayout{
+			{
+				Name:  wellknown.SlurmGresNameDRANet,
+				Type:  wellknown.DraNetDeviceClassIB,
+				Count: 2,
+			},
+		},
+	}, wellknown.DraNetDeviceClassIB)
+	if err == nil {
+		t.Fatal("getGresCursor() succeeded without concrete Slurm IDX")
+	}
+	if !strings.Contains(err.Error(), "did not include concrete IDX") {
+		t.Fatalf("getGresCursor() error = %v, want concrete IDX message", err)
 	}
 }
 
