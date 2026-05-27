@@ -133,6 +133,14 @@ install-dra: ## Add all DRA configs from hack/kind.sh (dra-driver-cpu and dra-ex
 install-dra-driver-cpu: ## Install dra-driver-cpu into the current Kubernetes context.
 	./hack/dra-driver-cpu.sh
 
+.PHONY: install-nvidia-gpu-dra
+install-nvidia-gpu-dra: ## Install NVIDIA GPU DRA with mock NVML fake GPUs into the current Kubernetes context.
+	./hack/nvidia-gpu-dra.sh
+
+.PHONY: uninstall-nvidia-gpu-dra
+uninstall-nvidia-gpu-dra: ## Uninstall NVIDIA GPU DRA from the current Kubernetes context.
+	./hack/nvidia-gpu-dra.sh uninstall
+
 DRANET_VERSION ?= latest
 DRANET_ROLLOUT_TIMEOUT ?= 180s
 DRANET_TAINT_KEY ?= slinky.slurm.net/managed-node
