@@ -129,6 +129,10 @@ debug-validate: ## Validate the Skaffold debug profile and Helm debug post-rende
 install-dra: ## Add all DRA configs from hack/kind.sh (dra-driver-cpu and dra-example-driver).
 	./hack/kind.sh --dra-driver-cpu --dra-example-driver --bridge $(KIND_CLUSTER_NAME)
 
+.PHONY: install-dra-driver-cpu
+install-dra-driver-cpu: ## Install dra-driver-cpu into the current Kubernetes context.
+	./hack/dra-driver-cpu.sh
+
 DRANET_VERSION ?= latest
 DRANET_ROLLOUT_TIMEOUT ?= 180s
 DRANET_TAINT_KEY ?= slinky.slurm.net/managed-node

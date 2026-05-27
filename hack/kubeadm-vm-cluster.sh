@@ -9,6 +9,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
 WORKER_IPS=()
 SLURM_WORKER_IPS=()
@@ -26,6 +27,7 @@ K8S_FEATURE_GATES="${K8S_FEATURE_GATES:-DynamicResourceAllocation=true,DRAExtend
 RESET=false
 SKIP_CNI=false
 KUBECONFIG_OUT="${KUBECONFIG_OUT:-}"
+INSTALL_DRA_DRIVER_CPU=false
 
 function log() {
 	printf '[kubeadm-vm] %s\n' "$*"
@@ -60,6 +62,8 @@ Options:
   --disable-containerd-nri
                           Do not enable containerd NRI during node preparation.
   --feature-gates GATES   Kubernetes component feature gates. Default: ${K8S_FEATURE_GATES}
+  --dra-driver-cpu        Install kubernetes-sigs/dra-driver-cpu after the cluster is Ready.
+                          The driver is scoped to Slurm-managed workers and defaults to individual CPU mode.
   --reset                 Run kubeadm reset and clear CNI state before init/join.
   -h, --help              Show this help.
 
@@ -191,6 +195,10 @@ while [[ $# -gt 0 ]]; do
 		K8S_FEATURE_GATES="${1#*=}"
 		shift
 		;;
+	--dra-driver-cpu)
+		INSTALL_DRA_DRIVER_CPU=true
+		shift
+		;;
 	--reset)
 		RESET=true
 		shift
@@ -230,6 +238,10 @@ function require_command() {
 require_command ssh
 require_command scp
 require_command expect
+if $INSTALL_DRA_DRIVER_CPU; then
+	require_command kubectl
+	require_command curl
+fi
 
 if [[ -z "$REMOTE_PASSWORD" ]]; then
 	fail "REMOTE_PASSWORD or --password is required because this script uses password SSH auth"
@@ -417,6 +429,7 @@ required_plugins = []
     disable_hugetlb_controller = true
     disable_proc_mount = false
     disable_tcp_service = true
+    enable_cdi = true
     enable_selinux = false
     enable_tls_streaming = false
     enable_unprivileged_icmp = false
@@ -435,6 +448,7 @@ required_plugins = []
     systemd_cgroup = false
     tolerate_missing_hugetlb_controller = true
     unset_seccomp_profile = ""
+    cdi_spec_dirs = ["/etc/cdi", "/var/run/cdi"]
 
     [plugins."io.containerd.grpc.v1.cri".cni]
       bin_dir = "/opt/cni/bin"
@@ -488,6 +502,7 @@ EOF
 }
 
 mkdir -p /etc/containerd
+mkdir -p /etc/cdi /var/run/cdi
 if [[ "$ENABLE_CONTAINERD_NRI" == "true" ]]; then
 	mkdir -p /etc/nri/conf.d /opt/nri/plugins /var/run/nri
 fi
@@ -704,6 +719,11 @@ function write_kubeconfig() {
 	chmod 0600 "$KUBECONFIG_OUT"
 }
 
+function install_dra_driver_cpu() {
+	log "installing dra-driver-cpu into ${KUBECONFIG_OUT}"
+	KUBECONFIG="$KUBECONFIG_OUT" "${SCRIPT_DIR}/dra-driver-cpu.sh"
+}
+
 all_ips=("$CONTROL_PLANE_IP" "${WORKER_IPS[@]}" "${SLURM_WORKER_IPS[@]}")
 
 for ip in "${all_ips[@]}"; do
@@ -758,3 +778,7 @@ remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl --requ
 
 write_kubeconfig
 remote "$CONTROL_PLANE_IP" "KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes -o wide"
+
+if $INSTALL_DRA_DRIVER_CPU; then
+	install_dra_driver_cpu
+fi

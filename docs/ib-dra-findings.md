@@ -103,6 +103,8 @@
 - The expected feature-gate shape is:
   - `--feature-gates=DynamicResourceAllocation=true,DRAExtendedResource=true`
 - `hack/kubeadm-vm-cluster.sh` now enables the DRA gates by default for kubeadm-created clusters via `K8S_FEATURE_GATES`.
+- `hack/kubeadm-vm-cluster.sh --dra-driver-cpu` can also install `dra-driver-cpu` after the kubeadm cluster is Ready; the helper defaults the driver to `--cpu-device-mode=individual`.
+- The kubeadm containerd config enables both NRI and CDI so CPU DRA enforcement can work on containerd versions where these are not already enabled by default.
 
 ## Current DRANET Bridge State
 
