@@ -27,6 +27,9 @@ spec:
       containers:
       - args:
         - --config=/etc/kubernetes/scheduler-config.yaml
+        {{- with .Values.scheduler.featureGates }}
+        - --feature-gates={{ include "slurm-bridge.featureGates" . }}
+        {{- end }}
         {{- with .Values.scheduler.verbosity }}
         - --v={{ . }}
         {{- end }}

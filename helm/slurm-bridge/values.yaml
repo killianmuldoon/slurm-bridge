@@ -18,6 +18,11 @@ scheduler:
     tag: ""
   # -- Set the number of replicas to deploy.
   replicaCount: 1
+  # -- Set Kubernetes feature gates for the scheduler process.
+  # Ref: https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/
+  featureGates:
+    DynamicResourceAllocation: true
+    DRAExtendedResource: true
   # -- Enables leader election.
   leaderElect: false
   # -- Set the priority class to use.

@@ -10,6 +10,7 @@
     - "40000"
     - --
     - --config=/etc/kubernetes/scheduler-config.yaml
+    - --feature-gates=DRAExtendedResource=true,DynamicResourceAllocation=true
 - op: add
   path: /spec/template/spec/containers/0/ports
   value:
