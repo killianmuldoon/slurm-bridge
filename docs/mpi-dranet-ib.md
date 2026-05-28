@@ -22,18 +22,21 @@ The smoke test uses Trainer's PodGroupPolicy path:
 - The runtime uses Kubeflow's public DeepSpeed image,
   `ghcr.io/kubeflow/trainer/deepspeed-runtime:v2.2.0`.
 - Each pod requests `deviceclass.resource.kubernetes.io/dranet-ib: 1`.
-- Each pod installs the minimal missing runtime packages, `iproute2` and
-  `python3-mpi4py`, before starting SSH and MPI.
-- Each pod configures deterministic IPoIB addresses on the DRANET-provided
-  interface, starts SSH, writes `/tmp/mpi-hostfile` and the MPI smoke payload,
-  then holds. The script runs `kubectl exec` against the held launcher to prove
-  SSH and MPI traffic over the IB interface.
+- The runtime does not run privileged and drops `NET_ADMIN` and `SYS_ADMIN`, so
+  the test no longer bypasses DRA device isolation for manual IPoIB setup.
+- The runtime adds only `IPC_LOCK`, which UCX verbs needs so it can register
+  pinned memory for RDMA without restoring full privileged mode.
+- UCX auto-selects an available RDMA device; the proof checks UCX logs for the
+  `rc_mlx5` transport instead of forcing a specific HCA.
+- Each pod starts SSH, copies Trainer's `/etc/mpi/hostfile` to
+  `/tmp/mpi-hostfile`, writes the MPI smoke payload, then holds. The script runs
+  `kubectl exec` against the held launcher to prove MPI traffic over UCX/RDMA.
 - The MPI proof prints rank output, allreduce validation, elapsed time,
-  approximate per-rank and aggregate MiB/s, and pod-local IB RX/TX byte deltas.
+  approximate per-rank and aggregate MiB/s, and UCX `rc_mlx5` transport logs.
 
 This proves the TrainJob -> Trainer-created PodGroup -> JobSet ->
-`slurm-bridge` -> DRANET IB path can run MPI traffic. The PodGroup is created
-by Trainer; the test does not create one directly.
+`slurm-bridge` -> DRANET IB path can run MPI traffic over RDMA. The PodGroup is
+created by Trainer; the test does not create one directly.
 
 ## Prerequisites
 
@@ -113,8 +116,8 @@ KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
 ```
 
 `run` recreates the TrainJob in hold mode, waits for the launcher and worker
-pods to become Ready, runs MPI via `kubectl exec`, checks that the MPI output
-and IB counters prove traffic, and cleans up the held pods on success. To keep
+pods to become Ready, runs MPI via `kubectl exec`, checks that the MPI output and
+UCX logs prove RDMA traffic, and cleans up the held pods on success. To keep
 successful pods running:
 
 ```sh
@@ -132,10 +135,9 @@ KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
 ```
 
 Debug mode applies the same TrainJob/runtime path, requests the same
-`dranet-ib` DRA device, configures SSH and the test IPoIB addresses, writes
-`/tmp/mpi-hostfile` and `/tmp/mpi_ib_smoke.py`, then sleeps in each pod. Use
-`test` to run the `kubectl exec` MPI proof against already-held pods, and
-`cleanup` when done.
+`dranet-ib` DRA device, configures SSH, writes `/tmp/mpi-hostfile` and
+`/tmp/mpi_ib_smoke.py`, then sleeps in each pod. Use `test` to run the
+`kubectl exec` MPI proof against already-held pods, and `cleanup` when done.
 
 Useful subcommands:
 
@@ -155,30 +157,19 @@ Useful subcommands:
 
 ```sh
 SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES=4
-SLURM_BRIDGE_TRAINJOB_IB_TEST_IFACE=ib0
-SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX=10.200.3
 SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_BYTES=16777216
 SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_ITERS=8
 SLURM_BRIDGE_TRAINJOB_IB_TEST_KEEP_PODS=true
 SLURM_BRIDGE_TRAINER_VERSION=2.2.0
 ```
 
-The script assigns deterministic test IPs starting at
-`${SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX}.101`. This is intentional for the
-smoke test; production runtimes should use proper IPAM or a site-specific
-network setup.
-
-The DeepSpeed runtime image does not include every smoke-test helper on every
-tag. The runtime command installs `iproute2` and `python3-mpi4py` only when
-needed, so cluster egress to Ubuntu package mirrors is required in that fallback
-case.
+The runtime expects the DeepSpeed image to contain OpenMPI, UCX, SSH, and
+`mpi4py`. It does not install packages at pod startup.
 
 ## Follow-up Features
 
 - Whole-JobSet scheduling in `slurm-bridge`, so a TrainJob JobSet can map to
   one Slurm allocation even when a runtime does not create a PodGroup.
-- A non-smoke MPI runtime that uses site IPAM instead of deterministic test
-  addresses.
-- Optional UCX/RDMA transport mode once the target image and fabric expose a
-  stable RDMA device-to-netdev mapping.
+- A non-smoke MPI runtime with explicit site policy for UCX device selection
+  when multi-HCA placement matters.
 - Hardware e2e coverage where DRANET and IB are available.

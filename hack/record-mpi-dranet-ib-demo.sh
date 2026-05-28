@@ -16,8 +16,6 @@ AGG="${AGG:-agg}"
 NAMESPACE="${SLURM_BRIDGE_TRAINJOB_IB_TEST_NAMESPACE:-slurm-bridge}"
 TRAINJOB="${SLURM_BRIDGE_TRAINJOB_IB_TEST_NAME:-mpi-dranet-ib}"
 DEVICE_CLASS="${SLURM_BRIDGE_TRAINJOB_IB_TEST_DEVICE_CLASS:-dranet-ib}"
-IB_IFACE="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IFACE:-ib0}"
-IB_IPV4_PREFIX="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX:-10.200.3}"
 NUM_NODES="${SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES:-2}"
 
 WAIT_SECONDS="${SLURM_BRIDGE_MPI_DEMO_WAIT_SECONDS:-600}"
@@ -51,8 +49,6 @@ Environment overrides:
   SLURM_BRIDGE_TRAINJOB_IB_TEST_NAMESPACE=$NAMESPACE
   SLURM_BRIDGE_TRAINJOB_IB_TEST_NAME=$TRAINJOB
   SLURM_BRIDGE_TRAINJOB_IB_TEST_DEVICE_CLASS=$DEVICE_CLASS
-  SLURM_BRIDGE_TRAINJOB_IB_TEST_IFACE=$IB_IFACE
-  SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX=$IB_IPV4_PREFIX
   SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES=$NUM_NODES
 
 Run dependency setup outside the recording when needed:
@@ -172,40 +168,21 @@ function wait_for_pod_count() {
   done
 }
 
-function read_counter() {
-  local pod="$1"
-  local counter="$2"
-  "$KUBECTL" -n "$NAMESPACE" exec "$pod" -- \
-    cat "/sys/class/net/${IB_IFACE}/statistics/${counter}" | tr -d '\r\n'
-}
-
 function run_mpi() {
   local launcher="$1"
-  local command_text
-  command_text="${KUBECTL} -n ${NAMESPACE} exec ${launcher} -- mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args '-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10' -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py"
+  local mpi_cmd
+  mpi_cmd='set -euo pipefail
+export PYTHONPATH="/home/mpiuser/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
+mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np '"${NUM_NODES}"' --mca pml ucx --mca osc ucx --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" -x UCX_TLS -x UCX_LOG_LEVEL -x PYTHONPATH -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py'
 
-  title "Run MPI traffic over the IB interface"
-  prompt "$command_text"
-  "$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- \
-    mpirun \
-    --allow-run-as-root \
-    --hostfile /tmp/mpi-hostfile \
-    -np "$NUM_NODES" \
-    --mca btl_tcp_if_include "$IB_IFACE" \
-    --mca oob_tcp_if_include "$IB_IFACE" \
-    --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" \
-    -x MPI_TRAFFIC_BYTES \
-    -x MPI_TRAFFIC_ITERS \
-    /usr/bin/python3 /tmp/mpi_ib_smoke.py
+  title "Run MPI traffic over UCX/RDMA"
+  prompt "${KUBECTL} -n ${NAMESPACE} exec ${launcher} -- /bin/bash -lc 'mpirun --mca pml ucx --mca osc ucx ...'"
+  "$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- /bin/bash -lc "$mpi_cmd"
   pause
 }
 
 function run_demo() {
   local selector launcher worker jobid
-  local launcher_rx_before launcher_tx_before worker_rx_before worker_tx_before
-  local launcher_rx_after launcher_tx_after worker_rx_after worker_tx_after
-  local launcher_rx_delta launcher_tx_delta worker_rx_delta worker_tx_delta
-  local total_rx_delta total_tx_delta
 
   require_command "$KUBECTL"
   require_command jq
@@ -281,44 +258,13 @@ function run_demo() {
   run_cmd "Slurm job details include nodes and TRES/GRES" \
     "${KUBECTL} exec -n slurm slurm-controller-0 -c slurmctld -- /bin/bash -lc 'scontrol show job ${jobid} | grep -E \"JobId=|NodeList=|NumNodes=|TresPerNode|TRES\"'"
 
-  run_cmd "Launcher has an IPoIB address" \
-    "${KUBECTL} exec -n ${NAMESPACE} ${launcher} -- ip -br addr show ${IB_IFACE}"
+  run_cmd "Visible RDMA ports inside launcher" \
+    "${KUBECTL} exec -n ${NAMESPACE} ${launcher} -- /bin/bash -lc 'for d in /sys/class/infiniband/*; do [ -e \"\$d\" ] || continue; dev=\$(basename \"\$d\"); for p in \"\$d\"/ports/*; do [ -e \"\$p\" ] || continue; printf \"%s:%s state=%s link_layer=%s rate=%s\n\" \"\$dev\" \"\$(basename \"\$p\")\" \"\$(cat \"\$p/state\" 2>/dev/null || true)\" \"\$(cat \"\$p/link_layer\" 2>/dev/null || true)\" \"\$(cat \"\$p/rate\" 2>/dev/null || true)\"; done; done'"
 
-  run_cmd "Worker has an IPoIB address" \
-    "${KUBECTL} exec -n ${NAMESPACE} ${worker} -- ip -br addr show ${IB_IFACE}"
-
-  run_cmd "Open MPI hostfile uses the IB addresses" \
+  run_cmd "Open MPI hostfile from Trainer" \
     "${KUBECTL} exec -n ${NAMESPACE} ${launcher} -- cat /tmp/mpi-hostfile"
 
-  title "IB counters before MPI"
-  prompt "kubectl exec ... cat /sys/class/net/${IB_IFACE}/statistics/{rx_bytes,tx_bytes}"
-  launcher_rx_before="$(read_counter "$launcher" rx_bytes)"
-  launcher_tx_before="$(read_counter "$launcher" tx_bytes)"
-  worker_rx_before="$(read_counter "$worker" rx_bytes)"
-  worker_tx_before="$(read_counter "$worker" tx_bytes)"
-  printf 'ib_counter_before pod=%s iface=%s rx_bytes=%s tx_bytes=%s\n' "$launcher" "$IB_IFACE" "$launcher_rx_before" "$launcher_tx_before"
-  printf 'ib_counter_before pod=%s iface=%s rx_bytes=%s tx_bytes=%s\n' "$worker" "$IB_IFACE" "$worker_rx_before" "$worker_tx_before"
-  pause
-
   run_mpi "$launcher"
-
-  launcher_rx_after="$(read_counter "$launcher" rx_bytes)"
-  launcher_tx_after="$(read_counter "$launcher" tx_bytes)"
-  worker_rx_after="$(read_counter "$worker" rx_bytes)"
-  worker_tx_after="$(read_counter "$worker" tx_bytes)"
-  launcher_rx_delta="$((launcher_rx_after - launcher_rx_before))"
-  launcher_tx_delta="$((launcher_tx_after - launcher_tx_before))"
-  worker_rx_delta="$((worker_rx_after - worker_rx_before))"
-  worker_tx_delta="$((worker_tx_after - worker_tx_before))"
-  total_rx_delta="$((launcher_rx_delta + worker_rx_delta))"
-  total_tx_delta="$((launcher_tx_delta + worker_tx_delta))"
-
-  title "IB counters increased while MPI ran"
-  prompt "printf 'ib_counter_delta ...'"
-  printf 'ib_counter_delta pod=%s iface=%s rx_bytes_delta=%s tx_bytes_delta=%s\n' "$launcher" "$IB_IFACE" "$launcher_rx_delta" "$launcher_tx_delta"
-  printf 'ib_counter_delta pod=%s iface=%s rx_bytes_delta=%s tx_bytes_delta=%s\n' "$worker" "$IB_IFACE" "$worker_rx_delta" "$worker_tx_delta"
-  printf 'ib_counter_delta_total iface=%s rx_bytes_delta=%s tx_bytes_delta=%s\n' "$IB_IFACE" "$total_rx_delta" "$total_tx_delta"
-  pause
 
   run_cmd "Demo workload is left running for inspection" \
     "${KUBECTL} get pods,podgroup,jobset,trainjob -n ${NAMESPACE} -o wide"

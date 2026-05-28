@@ -21,9 +21,8 @@ JOBSET_VERSION="${SLURM_BRIDGE_JOBSET_VERSION:-0.11.0}"
 IMAGE="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IMAGE:-ghcr.io/kubeflow/trainer/deepspeed-runtime:v${TRAINER_VERSION}}"
 IMAGE_PULL_POLICY="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IMAGE_PULL_POLICY:-IfNotPresent}"
 NUM_NODES="${SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES:-2}"
-IB_IFACE="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IFACE:-ib0}"
-IB_IPV4_PREFIX="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX:-10.200.3}"
-IB_IPV4_PREFIX_LEN="${SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX_LEN:-24}"
+UCX_TLS="rc,sm,self"
+UCX_LOG_LEVEL="info"
 WAIT_TIMEOUT="${SLURM_BRIDGE_TRAINJOB_IB_TEST_WAIT_TIMEOUT:-600s}"
 SSH_WAIT_TIMEOUT_SECONDS="${SLURM_BRIDGE_TRAINJOB_IB_TEST_SSH_WAIT_TIMEOUT_SECONDS:-180}"
 CPU_REQUEST="${SLURM_BRIDGE_TRAINJOB_IB_TEST_CPU_REQUEST:-1}"
@@ -64,8 +63,6 @@ Environment overrides:
   SLURM_BRIDGE_TRAINJOB_IB_TEST_DEVICE_CLASS=$DEVICE_CLASS
   SLURM_BRIDGE_TRAINJOB_IB_TEST_IMAGE=$IMAGE
   SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES=$NUM_NODES
-  SLURM_BRIDGE_TRAINJOB_IB_TEST_IFACE=$IB_IFACE
-  SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX=$IB_IPV4_PREFIX
   SLURM_BRIDGE_TRAINJOB_IB_TEST_WAIT_TIMEOUT=$WAIT_TIMEOUT
   SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_BYTES=$MPI_TRAFFIC_BYTES
   SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_ITERS=$MPI_TRAFFIC_ITERS
@@ -195,7 +192,6 @@ function install_trainer() {
 function render_manifest() {
   ensure_mode
   ensure_numeric SLURM_BRIDGE_TRAINJOB_IB_TEST_NUM_NODES "$NUM_NODES"
-  ensure_numeric SLURM_BRIDGE_TRAINJOB_IB_TEST_IPV4_PREFIX_LEN "$IB_IPV4_PREFIX_LEN"
   ensure_numeric SLURM_BRIDGE_TRAINJOB_IB_TEST_SSH_WAIT_TIMEOUT_SECONDS "$SSH_WAIT_TIMEOUT_SECONDS"
   ensure_numeric SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_BYTES "$MPI_TRAFFIC_BYTES"
   ensure_numeric SLURM_BRIDGE_TRAINJOB_IB_TEST_MPI_TRAFFIC_ITERS "$MPI_TRAFFIC_ITERS"
@@ -291,10 +287,8 @@ spec:
                         - &mpi_ib_node_script |
                           set -euo pipefail
                           export DEBIAN_FRONTEND=noninteractive
-                          if ! command -v ip >/dev/null 2>&1 || ! /usr/bin/python3 -c 'from mpi4py import MPI' >/dev/null 2>&1; then
-                            apt-get update
-                            apt-get install -y --no-install-recommends iproute2 python3-mpi4py
-                          fi
+                          export PYTHONPATH="/home/mpiuser/.local/lib/python3.10/site-packages:\${PYTHONPATH:-}"
+                          /usr/bin/python3 -c 'from mpi4py import MPI'
                           mkdir -p /tmp/ssh /run/sshd
                           cp /root/.ssh/id_rsa /tmp/ssh/id_rsa
                           cp /root/.ssh/id_rsa.pub /tmp/ssh/id_rsa.pub
@@ -314,43 +308,16 @@ spec:
                           /usr/sbin/sshd -f /tmp/sshd_config -E /tmp/sshd.log
                           replicated_job="\${JOBSET_REPLICATED_JOB_NAME:?missing JobSet replicated job label}"
                           completion_index="\${JOB_COMPLETION_INDEX:?missing indexed Job completion label}"
-                          case "\$replicated_job" in
-                          launcher)
-                            ordinal="\$completion_index"
-                            ;;
-                          node)
-                            ordinal="\$((1 + completion_index))"
-                            ;;
-                          *)
-                            echo "unsupported replicated job: \${replicated_job}" >&2
-                            exit 1
-                            ;;
-                          esac
+                          hostfile=/tmp/mpi-hostfile
                           if [ -f /etc/mpi/hostfile ]; then
-                            world_size="\$(wc -l </etc/mpi/hostfile)"
-                          else
-                            world_size="\$TRAINJOB_NUM_NODES"
-                          fi
-                          world_size="\$(echo "\$world_size" | tr -d ' ')"
-                          if ! ip link show "\$IB_INTERFACE" >/dev/null 2>&1; then
-                            IB_INTERFACE=""
-                            for candidate in /sys/class/net/*; do
-                              if [ "\$(cat "\${candidate}/type")" = "32" ]; then
-                                IB_INTERFACE="\$(basename "\$candidate")"
-                                break
-                              fi
-                            done
-                          fi
-                          if [ -z "\$IB_INTERFACE" ]; then
-                            echo "no InfiniBand interface found in pod" >&2
-                            ip -br link >&2 || true
+                            cp /etc/mpi/hostfile "\$hostfile"
+                          elif [ "\$replicated_job" = "launcher" ]; then
+                            echo "/etc/mpi/hostfile is missing from launcher; Kubeflow Trainer did not publish MPI hostfile data" >&2
                             exit 1
+                          else
+                            : >"\$hostfile"
                           fi
-                          ip_addr="\${IB_IPV4_PREFIX}.\$((101 + ordinal))/\${IB_IPV4_PREFIX_LEN}"
-                          ip link show "\$IB_INTERFACE"
-                          ip link set "\$IB_INTERFACE" up
-                          ip addr replace "\$ip_addr" dev "\$IB_INTERFACE"
-                          ip -br addr show "\$IB_INTERFACE"
+                          world_size="\$TRAINJOB_NUM_NODES"
                           cat >/tmp/mpi_ib_smoke.py <<'PY'
                           import os
                           from array import array
@@ -393,14 +360,7 @@ spec:
                           with open("/tmp/mpi_done", "w", encoding="utf-8") as done:
                               done.write("ok\n")
                           PY
-                          echo "node ready replicated_job=\${replicated_job} completion_index=\${completion_index} ordinal=\${ordinal} world_size=\${world_size}"
-                          hostfile=/tmp/mpi-hostfile
-                          : >"\$hostfile"
-                          i=0
-                          while [ "\$i" -lt "\$world_size" ]; do
-                            printf '%s.%d slots=1\n' "\$IB_IPV4_PREFIX" "\$((101 + i))" >>"\$hostfile"
-                            i="\$((i + 1))"
-                          done
+                          echo "node ready replicated_job=\${replicated_job} completion_index=\${completion_index} world_size=\${world_size}"
                           cat "\$hostfile"
                           if [ "\$MPI_SMOKE_MODE" = "hold" ]; then
                             echo "debug hold active; pod is ready for kubectl exec"
@@ -427,34 +387,29 @@ spec:
                               sleep 2
                             done
                           done <"\$hostfile"
-                          rx_before="\$(cat "/sys/class/net/\${IB_INTERFACE}/statistics/rx_bytes")"
-                          tx_before="\$(cat "/sys/class/net/\${IB_INTERFACE}/statistics/tx_bytes")"
-                          echo "ib_link_stats_before \${IB_INTERFACE} rx_bytes=\${rx_before} tx_bytes=\${tx_before}"
                           mpirun \
                             --allow-run-as-root \
                             --hostfile "\$hostfile" \
                             -np "\$world_size" \
-                            --mca btl_tcp_if_include "\$IB_INTERFACE" \
-                            --mca oob_tcp_if_include "\$IB_INTERFACE" \
+                            --mca pml ucx \
+                            --mca osc ucx \
                             --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" \
+                            -x UCX_TLS \
+                            -x UCX_LOG_LEVEL \
+                            -x PYTHONPATH \
                             -x MPI_TRAFFIC_BYTES \
                             -x MPI_TRAFFIC_ITERS \
                             /usr/bin/python3 /tmp/mpi_ib_smoke.py
                           while read -r host _; do
                             ssh -p 2222 -i /tmp/ssh/id_rsa -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "root@\${host}" 'touch /tmp/mpi_done' >/dev/null 2>&1 || true
                           done <"\$hostfile"
-                          rx_after="\$(cat "/sys/class/net/\${IB_INTERFACE}/statistics/rx_bytes")"
-                          tx_after="\$(cat "/sys/class/net/\${IB_INTERFACE}/statistics/tx_bytes")"
-                          echo "ib_link_stats_after \${IB_INTERFACE} rx_bytes=\${rx_after} tx_bytes=\${tx_after}"
                       env:
                         - name: TRAINJOB_NUM_NODES
                           value: "${NUM_NODES}"
-                        - name: IB_INTERFACE
-                          value: ${IB_IFACE}
-                        - name: IB_IPV4_PREFIX
-                          value: ${IB_IPV4_PREFIX}
-                        - name: IB_IPV4_PREFIX_LEN
-                          value: "${IB_IPV4_PREFIX_LEN}"
+                        - name: UCX_TLS
+                          value: "${UCX_TLS}"
+                        - name: UCX_LOG_LEVEL
+                          value: "${UCX_LOG_LEVEL}"
                         - name: SSH_WAIT_TIMEOUT_SECONDS
                           value: "${SSH_WAIT_TIMEOUT_SECONDS}"
                         - name: MPI_TRAFFIC_BYTES
@@ -468,7 +423,13 @@ spec:
                             fieldRef:
                               fieldPath: metadata.labels['jobset.sigs.k8s.io/replicatedjob-name']
                       securityContext:
-                        privileged: true
+                        allowPrivilegeEscalation: false
+                        capabilities:
+                          add:
+                            - IPC_LOCK
+                          drop:
+                            - NET_ADMIN
+                            - SYS_ADMIN
                       resources:
                         requests:
                           cpu: "${CPU_REQUEST}"
@@ -522,12 +483,10 @@ spec:
                       env:
                         - name: TRAINJOB_NUM_NODES
                           value: "${NUM_NODES}"
-                        - name: IB_INTERFACE
-                          value: ${IB_IFACE}
-                        - name: IB_IPV4_PREFIX
-                          value: ${IB_IPV4_PREFIX}
-                        - name: IB_IPV4_PREFIX_LEN
-                          value: "${IB_IPV4_PREFIX_LEN}"
+                        - name: UCX_TLS
+                          value: "${UCX_TLS}"
+                        - name: UCX_LOG_LEVEL
+                          value: "${UCX_LOG_LEVEL}"
                         - name: MPI_TRAFFIC_BYTES
                           value: "${MPI_TRAFFIC_BYTES}"
                         - name: MPI_TRAFFIC_ITERS
@@ -545,7 +504,13 @@ spec:
                         periodSeconds: 2
                         failureThreshold: 60
                       securityContext:
-                        privileged: true
+                        allowPrivilegeEscalation: false
+                        capabilities:
+                          add:
+                            - IPC_LOCK
+                          drop:
+                            - NET_ADMIN
+                            - SYS_ADMIN
                       resources:
                         requests:
                           cpu: "${CPU_REQUEST}"
@@ -598,13 +563,6 @@ function test_pod_names() {
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
 }
 
-function read_pod_counter() {
-  local pod="$1"
-  local counter="$2"
-  "$KUBECTL" -n "$NAMESPACE" exec "$pod" -- \
-    cat "/sys/class/net/${IB_IFACE}/statistics/${counter}" | tr -d '\r\n'
-}
-
 function timeout_seconds() {
   local value="$1"
   case "$value" in
@@ -651,9 +609,7 @@ function wait_for_hold_pods() {
 
 function run_exec_mpi_test() {
   require_command "$KUBECTL"
-  local launcher pods tmpdir output mpirun_cmd pod
-  local rx_before tx_before rx_after tx_after rx_delta tx_delta
-  local total_rx_delta total_tx_delta
+  local launcher pods output mpirun_cmd pod
   launcher="$(launcher_pod_name)"
   pods="$(test_pod_names)"
   if [ -z "$launcher" ] || [ -z "$pods" ]; then
@@ -661,51 +617,30 @@ function run_exec_mpi_test() {
     exit 1
   fi
 
-  log "IB addresses"
+  log "RDMA devices visible to each pod"
   while read -r pod; do
     [ -n "$pod" ] || continue
-    "$KUBECTL" -n "$NAMESPACE" exec "$pod" -- ip -br addr show "$IB_IFACE"
+    "$KUBECTL" -n "$NAMESPACE" exec "$pod" -- /bin/bash -lc \
+      'set -euo pipefail; echo "pod=$(hostname)"; for d in /sys/class/infiniband/*; do [ -e "$d" ] || continue; dev=$(basename "$d"); for p in "$d"/ports/*; do [ -e "$p" ] || continue; port=$(basename "$p"); printf "%s:%s state=%s link_layer=%s rate=%s\n" "$dev" "$port" "$(cat "$p/state" 2>/dev/null || true)" "$(cat "$p/link_layer" 2>/dev/null || true)" "$(cat "$p/rate" 2>/dev/null || true)"; done; done'
   done <<<"$pods"
 
   log "MPI hostfile from launcher"
   "$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- cat /tmp/mpi-hostfile
 
-  log "Verifying SSH over ${IB_IFACE}"
+  log "Verifying MPI launcher SSH control path"
   "$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- /bin/bash -lc \
     'set -euo pipefail; while read -r host _; do ssh -p 2222 -i /tmp/ssh/id_rsa -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "root@${host}" true; done </tmp/mpi-hostfile'
 
-  tmpdir="$(mktemp -d)"
-  while read -r pod; do
-    [ -n "$pod" ] || continue
-    read_pod_counter "$pod" rx_bytes >"${tmpdir}/${pod}.rx_before"
-    read_pod_counter "$pod" tx_bytes >"${tmpdir}/${pod}.tx_before"
-  done <<<"$pods"
+  mpirun_cmd='set -euo pipefail
+export PYTHONPATH="/home/mpiuser/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
+mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np '"${NUM_NODES}"' --mca pml ucx --mca osc ucx --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" -x UCX_TLS -x UCX_LOG_LEVEL -x PYTHONPATH -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py'
 
-  mpirun_cmd="mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args \"-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10\" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py"
-
-  log "Running MPI traffic over ${IB_IFACE}"
-  if ! output="$("$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- /bin/bash -lc "$mpirun_cmd")"; then
+  log "Running MPI traffic over UCX/RDMA"
+  if ! output="$("$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- /bin/bash -lc "$mpirun_cmd" 2>&1)"; then
     printf '%s\n' "$output" >&2
-    rm -rf "$tmpdir"
     exit 1
   fi
   printf '%s\n' "$output"
-
-  total_rx_delta=0
-  total_tx_delta=0
-  while read -r pod; do
-    [ -n "$pod" ] || continue
-    rx_before="$(cat "${tmpdir}/${pod}.rx_before")"
-    tx_before="$(cat "${tmpdir}/${pod}.tx_before")"
-    rx_after="$(read_pod_counter "$pod" rx_bytes)"
-    tx_after="$(read_pod_counter "$pod" tx_bytes)"
-    rx_delta="$((rx_after - rx_before))"
-    tx_delta="$((tx_after - tx_before))"
-    total_rx_delta="$((total_rx_delta + rx_delta))"
-    total_tx_delta="$((total_tx_delta + tx_delta))"
-    echo "ib_counter_delta pod=${pod} iface=${IB_IFACE} rx_bytes_delta=${rx_delta} tx_bytes_delta=${tx_delta}"
-  done <<<"$pods"
-  rm -rf "$tmpdir"
 
   if ! printf '%s\n' "$output" | grep -q 'allreduce_sum='; then
     echo "MPI output does not contain allreduce proof" >&2
@@ -715,11 +650,10 @@ function run_exec_mpi_test() {
     echo "MPI output does not contain bandwidth proof" >&2
     exit 1
   fi
-  if [ "$total_rx_delta" -le 0 ] || [ "$total_tx_delta" -le 0 ]; then
-    echo "IB counters did not increase during MPI run: total_rx_delta=${total_rx_delta} total_tx_delta=${total_tx_delta}" >&2
+  if [ "$UCX_LOG_LEVEL" = "info" ] && ! printf '%s\n' "$output" | grep -q 'rc_mlx5/'; then
+    echo "UCX info logs do not show rc_mlx5 RDMA transport" >&2
     exit 1
   fi
-  echo "ib_counter_delta_total iface=${IB_IFACE} rx_bytes_delta=${total_rx_delta} tx_bytes_delta=${total_tx_delta}"
 }
 
 function wait_for_debug() {
@@ -737,12 +671,12 @@ Launcher shell:
   ${KUBECTL} -n ${NAMESPACE} exec -it \$(${KUBECTL} -n ${NAMESPACE} get pods -l "$(pod_selector),app.kubernetes.io/component=launcher" -o jsonpath='{.items[0].metadata.name}') -- bash
 
 Useful checks inside a pod:
-  ip -br addr
   cat /tmp/mpi-hostfile
-  ssh -p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no root@${IB_IPV4_PREFIX}.102 true
+  for d in /sys/class/infiniband/*; do echo "\$d"; cat "\$d"/ports/*/state; cat "\$d"/ports/*/link_layer; done
+  while read -r host _; do ssh -p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@\$host hostname; done </tmp/mpi-hostfile
 
 Manual MPI from the launcher:
-  mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py
+  PYTHONPATH="/home/mpiuser/.local/lib/python3.10/site-packages:\${PYTHONPATH:-}" mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca pml ucx --mca osc ucx --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" -x UCX_TLS -x UCX_LOG_LEVEL -x PYTHONPATH -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py
 EOF
 }
 
@@ -770,11 +704,28 @@ function show_logs() {
 
 function cleanup() {
   require_command "$KUBECTL"
+  local claims deadline
   log "Deleting TrainJob JobSet DRANET IB workload from context: $("$KUBECTL" config current-context)"
   "$KUBECTL" -n "$NAMESPACE" delete trainjob "$TRAINJOB" --ignore-not-found --wait=false
   "$KUBECTL" -n "$NAMESPACE" delete jobset "$TRAINJOB" --ignore-not-found --wait=false
+  "$KUBECTL" -n "$NAMESPACE" delete podgroup "$TRAINJOB" --ignore-not-found --wait=false
   "$KUBECTL" -n "$NAMESPACE" delete pods -l "$(pod_selector)" --ignore-not-found --wait=false
+  claims="$("$KUBECTL" -n "$NAMESPACE" get resourceclaims -o name 2>/dev/null | grep "^resourceclaim/${TRAINJOB}" || true)"
+  if [ -n "$claims" ]; then
+    "$KUBECTL" -n "$NAMESPACE" delete $claims --ignore-not-found --wait=false
+  fi
+  "$KUBECTL" -n "$NAMESPACE" wait --for=delete trainjob "$TRAINJOB" --timeout="$WAIT_TIMEOUT" 2>/dev/null || true
+  "$KUBECTL" -n "$NAMESPACE" wait --for=delete jobset "$TRAINJOB" --timeout="$WAIT_TIMEOUT" 2>/dev/null || true
+  "$KUBECTL" -n "$NAMESPACE" wait --for=delete podgroup "$TRAINJOB" --timeout="$WAIT_TIMEOUT" 2>/dev/null || true
   "$KUBECTL" -n "$NAMESPACE" wait --for=delete pods -l "$(pod_selector)" --timeout="$WAIT_TIMEOUT" || true
+  deadline="$(($(date +%s) + $(timeout_seconds "$WAIT_TIMEOUT")))"
+  while "$KUBECTL" -n "$NAMESPACE" get resourceclaims -o name 2>/dev/null | grep -q "^resourceclaim/${TRAINJOB}"; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "timed out waiting for generated ResourceClaims for ${TRAINJOB} to delete" >&2
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 case "${1:-run}" in
