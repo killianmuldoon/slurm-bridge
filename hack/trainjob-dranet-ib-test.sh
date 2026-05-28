@@ -436,7 +436,7 @@ spec:
                             -np "\$world_size" \
                             --mca btl_tcp_if_include "\$IB_INTERFACE" \
                             --mca oob_tcp_if_include "\$IB_INTERFACE" \
-                            --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectionAttempts=10" \
+                            --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" \
                             -x MPI_TRAFFIC_BYTES \
                             -x MPI_TRAFFIC_ITERS \
                             /usr/bin/python3 /tmp/mpi_ib_smoke.py
@@ -681,7 +681,7 @@ function run_exec_mpi_test() {
     read_pod_counter "$pod" tx_bytes >"${tmpdir}/${pod}.tx_before"
   done <<<"$pods"
 
-  mpirun_cmd="mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args \"-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectionAttempts=10\" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py"
+  mpirun_cmd="mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args \"-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10\" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py"
 
   log "Running MPI traffic over ${IB_IFACE}"
   if ! output="$("$KUBECTL" -n "$NAMESPACE" exec "$launcher" -- /bin/bash -lc "$mpirun_cmd")"; then
@@ -742,7 +742,7 @@ Useful checks inside a pod:
   ssh -p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no root@${IB_IPV4_PREFIX}.102 true
 
 Manual MPI from the launcher:
-  mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectionAttempts=10" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py
+  mpirun --allow-run-as-root --hostfile /tmp/mpi-hostfile -np ${NUM_NODES} --mca btl_tcp_if_include ${IB_IFACE} --mca oob_tcp_if_include ${IB_IFACE} --mca plm_rsh_args "-p 2222 -i /tmp/ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectionAttempts=10" -x MPI_TRAFFIC_BYTES -x MPI_TRAFFIC_ITERS /usr/bin/python3 /tmp/mpi_ib_smoke.py
 EOF
 }
 

@@ -76,6 +76,42 @@ KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
 ./hack/trainjob-dranet-ib-test.sh run
 ```
 
+## Record A Demo
+
+Install or refresh dependencies outside the recording:
+
+```sh
+KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
+./hack/trainjob-dranet-ib-test.sh install
+```
+
+Then record the terminal demo:
+
+```sh
+KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
+./hack/record-mpi-dranet-ib-demo.sh record
+```
+
+The recorder uses `asciinema` and writes a `.cast` file under
+`demo-recordings/`. If `agg` is installed, it also renders a GIF next to the
+cast file. The recorder sets a consistent terminal size with asciinema's
+`--window-size` option; override it with `SLURM_BRIDGE_MPI_DEMO_WINDOW_SIZE`,
+for example `132x40` or `120x36`. The recording intentionally does not clean up
+at the end so the TrainJob, JobSet, PodGroup, pods, ResourceClaims, and Slurm
+allocation remain available for inspection. Run cleanup manually when finished:
+
+```sh
+KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
+./hack/trainjob-dranet-ib-test.sh cleanup
+```
+
+To run the same demo flow without recording:
+
+```sh
+KUBECONFIG=/Users/kmuldoon/go/src/slurm-bridge/kubeadm-slurm-bridge-vm.conf \
+./hack/record-mpi-dranet-ib-demo.sh demo
+```
+
 `run` recreates the TrainJob in hold mode, waits for the launcher and worker
 pods to become Ready, runs MPI via `kubectl exec`, checks that the MPI output
 and IB counters prove traffic, and cleans up the held pods on success. To keep
