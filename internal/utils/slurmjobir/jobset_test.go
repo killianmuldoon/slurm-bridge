@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -26,6 +27,69 @@ func newJobSet(name string) *jobset.JobSet {
 			Namespace: metav1.NamespaceDefault,
 			Name:      name,
 		},
+	}
+}
+
+func TestTranslateToSlurmJobIR_TrainerOwnedJobSet(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(kubescheme.AddToScheme(scheme))
+	utilruntime.Must(batchv1.AddToScheme(scheme))
+	utilruntime.Must(jobset.AddToScheme(scheme))
+
+	js := newJobSet("trainjob")
+	js.Annotations = map[string]string{
+		wellknown.AnnotationJobName:   "trainjob",
+		wellknown.AnnotationTimeLimit: "30",
+	}
+	js.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: "trainer.kubeflow.org/v1alpha1",
+			Kind:       "TrainJob",
+			Name:       "trainjob",
+			Controller: ptr.To(true),
+		},
+	}
+
+	job := newJob("trainjob-launcher-0")
+	job.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: jobset.GroupVersion.String(),
+			Kind:       "JobSet",
+			Name:       "trainjob",
+			Controller: ptr.To(true),
+		},
+	}
+
+	pod := newJobPod("trainjob-launcher-0-abcde", "trainjob-launcher-0")
+	pod.Labels[jobset.JobSetNameKey] = "trainjob"
+	pod.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: batchv1.SchemeGroupVersion.String(),
+			Kind:       "Job",
+			Name:       "trainjob-launcher-0",
+			Controller: ptr.To(true),
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(js, job, pod).Build()
+	got, err := TranslateToSlurmJobIR(c, context.Background(), pod)
+	if err != nil {
+		t.Fatalf("TranslateToSlurmJobIR() error = %v", err)
+	}
+	if got.RootPOM.TypeMeta != jobSet_v1alpha2 {
+		t.Fatalf("TranslateToSlurmJobIR() root type = %v, want %v", got.RootPOM.TypeMeta, jobSet_v1alpha2)
+	}
+	if got.RootPOM.Name != "trainjob" {
+		t.Fatalf("TranslateToSlurmJobIR() root name = %q, want trainjob", got.RootPOM.Name)
+	}
+	if got.JobInfo.JobName == nil || *got.JobInfo.JobName != "trainjob" {
+		t.Fatalf("TranslateToSlurmJobIR() job name = %v, want trainjob", got.JobInfo.JobName)
+	}
+	if got.JobInfo.TimeLimit == nil || *got.JobInfo.TimeLimit != 30 {
+		t.Fatalf("TranslateToSlurmJobIR() time limit = %v, want 30", got.JobInfo.TimeLimit)
+	}
+	if len(got.Pods.Items) != 1 || got.Pods.Items[0].Name != pod.Name {
+		t.Fatalf("TranslateToSlurmJobIR() pods = %v, want only %s", got.Pods.Items, pod.Name)
 	}
 }
 

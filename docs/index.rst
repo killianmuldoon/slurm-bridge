@@ -185,6 +185,7 @@ limitations under the License.
     architecture.md
     config.md
     controllers.md
+    mpi-dranet-ib.md
     quickstart.md
     scheduler.md
     testing.md

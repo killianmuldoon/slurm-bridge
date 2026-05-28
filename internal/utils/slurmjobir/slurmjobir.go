@@ -17,6 +17,7 @@ import (
 	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 
 	"github.com/SlinkyProject/slurm-bridge/internal/utils"
 	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
@@ -74,18 +75,34 @@ func PreFilter(c client.Client, ctx context.Context, pod *corev1.Pod, slurmJobIR
 }
 
 func TranslateToSlurmJobIR(c client.Client, ctx context.Context, pod *corev1.Pod) (slurmJobIR *SlurmJobIR, err error) {
-	rootPOM, err := utils.GetRootOwnerMetadata(c, ctx, pod)
-	if err != nil {
-		return nil, err
-	}
-
 	t := translator{Reader: c, ctx: ctx}
 
 	// PodGroup does not conventionally own the Pod, rather is associated by the PodGroupLabel.
 	// The Kubernetes co-scheduler would take the PodGroup into consideration when scheduling.
+	var rootPOM *metav1.PartialObjectMetadata
 	if _, podGroup := t.GetPodGroup(pod); podGroup != nil {
-		rootPOM.TypeMeta = podGroup_v1alpha1
-		rootPOM.Name = podGroup.Name
+		rootPOM = &metav1.PartialObjectMetadata{
+			TypeMeta: podGroup_v1alpha1,
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      podGroup.Name,
+				Namespace: podGroup.Namespace,
+			},
+		}
+	} else if jobSetName := pod.Labels[jobset.JobSetNameKey]; jobSetName != "" {
+		// A JobSet may itself be owned by a higher-level API such as Kubeflow TrainJob.
+		// Stop at the JobSet boundary so JobSet-specific scheduling semantics still apply.
+		rootPOM = &metav1.PartialObjectMetadata{
+			TypeMeta: jobSet_v1alpha2,
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      jobSetName,
+				Namespace: pod.Namespace,
+			},
+		}
+	} else {
+		rootPOM, err = utils.GetRootOwnerMetadata(c, ctx, pod)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := t.Get(t.ctx, client.ObjectKeyFromObject(rootPOM), rootPOM); err != nil {

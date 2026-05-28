@@ -22,6 +22,7 @@ metadata:
   namespace: slurm-bridge
   annotations:
     slurmjob.slinky.slurm.net/job-name: ib-dra
+    slurmjob.slinky.slurm.net/exclusive: "false"
     slurmjob.slinky.slurm.net/timelimit: "30"
 spec:
   minMember: 2
@@ -92,11 +93,11 @@ spec:
         failureThreshold: 3
       resources:
         requests:
-          cpu: "1"
+          cpu: "2"
           memory: 256Mi
           deviceclass.resource.kubernetes.io/dranet-ib: "2"
         limits:
-          cpu: "1"
+          cpu: "2"
           memory: 512Mi
           deviceclass.resource.kubernetes.io/dranet-ib: "2"
 ---
