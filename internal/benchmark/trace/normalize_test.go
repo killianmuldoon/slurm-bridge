@@ -46,19 +46,66 @@ job-c,worker,1,Terminated,11,30,800,50,250,T4
 }
 
 func TestNormalizeJobsMaxJobs(t *testing.T) {
-	jobsInput := `job-a,1001,user-a,Terminated,10,40
-job-b,1002,user-b,Terminated,11,40
+	jobsInput := `job-a,1001,user-a,Terminated,20,40
+job-b,1002,user-b,Terminated,10,40
 `
-	tasksInput := `job-a,worker,1,Terminated,12,40,400,10,0,CPU
-job-b,worker,1,Terminated,13,40,400,10,0,CPU
+	tasksInput := `job-a,worker,1,Terminated,21,40,400,10,0,CPU
+job-b,worker,1,Terminated,11,40,400,10,0,CPU
 `
 
 	got, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{MaxJobs: 1})
 	if err != nil {
 		t.Fatalf("NormalizeJobs() error = %v", err)
 	}
-	if len(got) != 1 || got[0].JobID != "1001" {
-		t.Fatalf("NormalizeJobs() = %#v, want only first selected job", got)
+	if len(got) != 1 || got[0].JobID != "1002" {
+		t.Fatalf("NormalizeJobs() = %#v, want earliest submitted job", got)
+	}
+}
+
+func TestNormalizeJobsFailsOnMissingTasks(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,10,40
+`
+	tasksInput := `job-b,worker,1,Terminated,12,40,400,10,0,CPU
+`
+
+	_, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err == nil {
+		t.Fatal("NormalizeJobs() error = nil, want missing task error")
+	}
+	if !strings.Contains(err.Error(), `job "job-a" has no matching tasks`) {
+		t.Fatalf("NormalizeJobs() error = %v, want missing task message", err)
+	}
+}
+
+func TestNormalizeJobsFailsOnInvalidRuntime(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,10,12
+`
+	tasksInput := `job-a,worker,1,Terminated,12,40,400,10,0,CPU
+`
+
+	_, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err == nil {
+		t.Fatal("NormalizeJobs() error = nil, want invalid runtime error")
+	}
+	if !strings.Contains(err.Error(), "non-positive simulated runtime") {
+		t.Fatalf("NormalizeJobs() error = %v, want runtime message", err)
+	}
+}
+
+func TestNormalizeJobsFailsOnDuplicateJobID(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,10,40
+job-b,1001,user-b,Terminated,11,40
+`
+	tasksInput := `job-a,worker,1,Terminated,12,40,400,10,0,CPU
+job-b,worker,1,Terminated,13,40,400,10,0,CPU
+`
+
+	_, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err == nil {
+		t.Fatal("NormalizeJobs() error = nil, want duplicate job_id error")
+	}
+	if !strings.Contains(err.Error(), `both normalize to job_id "1001"`) {
+		t.Fatalf("NormalizeJobs() error = %v, want duplicate job_id message", err)
 	}
 }
 

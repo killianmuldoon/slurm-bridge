@@ -56,13 +56,10 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 			return nil
 		}
 		if _, exists := selected[record.JobName]; exists {
-			return nil
+			return fmt.Errorf("duplicate job_name %q", record.JobName)
 		}
 		selected[record.JobName] = record
 		order = append(order, record.JobName)
-		if opts.MaxJobs > 0 && len(order) >= opts.MaxJobs {
-			return ErrStopScan
-		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -80,6 +77,7 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 	}
 
 	jobs := make([]BenchmarkJob, 0, len(order))
+	seenJobIDs := map[string]string{}
 	for _, jobName := range order {
 		job, ok := selected[jobName]
 		if !ok {
@@ -87,13 +85,17 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 		}
 		tasks := tasksByJob[jobName]
 		if len(tasks) == 0 {
-			continue
+			return nil, fmt.Errorf("job %q has no matching tasks", jobName)
 		}
 
 		normalized, err := normalizeJob(job, tasks)
 		if err != nil {
-			continue
+			return nil, err
 		}
+		if previous, ok := seenJobIDs[normalized.JobID]; ok {
+			return nil, fmt.Errorf("jobs %q and %q both normalize to job_id %q", previous, jobName, normalized.JobID)
+		}
+		seenJobIDs[normalized.JobID] = jobName
 		jobs = append(jobs, normalized)
 	}
 
@@ -103,6 +105,10 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 		}
 		return jobs[i].SubmitTime < jobs[j].SubmitTime
 	})
+
+	if opts.MaxJobs > 0 && len(jobs) > opts.MaxJobs {
+		jobs = jobs[:opts.MaxJobs]
+	}
 
 	return jobs, nil
 }

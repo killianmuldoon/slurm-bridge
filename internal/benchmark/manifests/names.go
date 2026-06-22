@@ -34,14 +34,14 @@ func KubernetesName(fallback string, parts ...string) string {
 }
 
 func LabelValue(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	source := strings.TrimSpace(value)
+	if source == "" {
 		return "unknown"
 	}
 
 	var b strings.Builder
 	lastWasSeparator := false
-	for _, r := range value {
+	for _, r := range source {
 		valid := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.'
 		if valid {
 			b.WriteRune(r)
@@ -58,13 +58,10 @@ func LabelValue(value string) string {
 	if out == "" {
 		out = "unknown"
 	}
-	if len(out) > dnsLabelMaxLength {
-		out = strings.Trim(out[:dnsLabelMaxLength], "-_.")
+	if out == source && len(out) <= dnsLabelMaxLength {
+		return out
 	}
-	if out == "" {
-		return "unknown"
-	}
-	return out
+	return hashedLabelValue(out, source)
 }
 
 func dnsLabel(value string) string {
@@ -104,4 +101,17 @@ func hashedDNSLabel(base, source string) string {
 func shortHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])[:8]
+}
+
+func hashedLabelValue(base, source string) string {
+	hash := shortHash(source)
+	maxBaseLength := dnsLabelMaxLength - len(hash) - 1
+	if len(base) > maxBaseLength {
+		base = base[:maxBaseLength]
+	}
+	base = strings.Trim(base, "-_.")
+	if base == "" {
+		base = "unknown"
+	}
+	return base + "-" + hash
 }
