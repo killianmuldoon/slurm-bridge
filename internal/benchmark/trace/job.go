@@ -106,41 +106,38 @@ func ReadTaskRecordsFile(path string) ([]TaskRecord, error) {
 }
 
 func ScanJobRecords(r io.Reader, visit func(JobRecord) error) error {
-	reader := csv.NewReader(r)
-	reader.FieldsPerRecord = -1
-	reader.TrimLeadingSpace = true
-
-	seenData := false
-	for rowNumber := 1; ; rowNumber++ {
-		row, err := reader.Read()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if !seenData {
-					return fmt.Errorf("%s is empty", JobTableFilename)
-				}
-				return nil
-			}
-			return fmt.Errorf("read %s row %d: %w", JobTableFilename, rowNumber, err)
-		}
-		if emptyCSVRow(row) {
-			continue
-		}
-
-		seenData = true
+	return scanCSVRows(JobTableFilename, r, func(row []string) error {
 		record, err := parseJobRecord(row)
 		if err != nil {
-			return fmt.Errorf("parse %s row %d: %w", JobTableFilename, rowNumber, err)
+			return err
 		}
 		if err := visit(record); err != nil {
 			if errors.Is(err, ErrStopScan) {
-				return nil
+				return ErrStopScan
 			}
 			return err
 		}
-	}
+		return nil
+	})
 }
 
 func ScanTaskRecords(r io.Reader, visit func(TaskRecord) error) error {
+	return scanCSVRows(TaskTableFilename, r, func(row []string) error {
+		record, err := parseTaskRecord(row)
+		if err != nil {
+			return err
+		}
+		if err := visit(record); err != nil {
+			if errors.Is(err, ErrStopScan) {
+				return ErrStopScan
+			}
+			return err
+		}
+		return nil
+	})
+}
+
+func scanCSVRows(filename string, r io.Reader, visit func([]string) error) error {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1
 	reader.TrimLeadingSpace = true
@@ -151,26 +148,22 @@ func ScanTaskRecords(r io.Reader, visit func(TaskRecord) error) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if !seenData {
-					return fmt.Errorf("%s is empty", TaskTableFilename)
+					return fmt.Errorf("%s is empty", filename)
 				}
 				return nil
 			}
-			return fmt.Errorf("read %s row %d: %w", TaskTableFilename, rowNumber, err)
+			return fmt.Errorf("read %s row %d: %w", filename, rowNumber, err)
 		}
 		if emptyCSVRow(row) {
 			continue
 		}
 
 		seenData = true
-		record, err := parseTaskRecord(row)
-		if err != nil {
-			return fmt.Errorf("parse %s row %d: %w", TaskTableFilename, rowNumber, err)
-		}
-		if err := visit(record); err != nil {
+		if err := visit(row); err != nil {
 			if errors.Is(err, ErrStopScan) {
 				return nil
 			}
-			return err
+			return fmt.Errorf("parse %s row %d: %w", filename, rowNumber, err)
 		}
 	}
 }
@@ -224,7 +217,7 @@ func parseTaskRecord(row []string) (TaskRecord, error) {
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	gpu, err := parseNonNegativeFloat(row[taskPlanGPUIndex], "plan_gpu")
+	gpu, err := parseOptionalPlanGPU(row[taskPlanGPUIndex])
 	if err != nil {
 		return TaskRecord{}, err
 	}
@@ -260,6 +253,14 @@ func parseNonNegativeFloat(value, field string) (float64, error) {
 		return 0, fmt.Errorf("%s must be non-negative", field)
 	}
 	return parsed, nil
+}
+
+func parseOptionalPlanGPU(value string) (float64, error) {
+	// Alibaba uses empty plan_gpu and gpu_type fields for CPU-only task roles.
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	return parseNonNegativeFloat(value, "plan_gpu")
 }
 
 func parseNonNegativeInt32(value, field string) (int32, error) {

@@ -45,6 +45,26 @@ func TestReadTaskRecords(t *testing.T) {
 	}
 }
 
+func TestReadTaskRecordsTreatsBlankPlanGPUAsZero(t *testing.T) {
+	input := `job-a,ps,5,Terminated,12,40,600,39.0625,,
+`
+
+	var got []TaskRecord
+	err := ScanTaskRecords(strings.NewReader(input), func(record TaskRecord) error {
+		got = append(got, record)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanTaskRecords() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ScanTaskRecords() returned %d records, want 1", len(got))
+	}
+	if got[0].PlanGPU != 0 || got[0].GPUType != "" {
+		t.Fatalf("task = %#v, want CPU-only GPU fields", got[0])
+	}
+}
+
 func TestReadTaskRecordsRejectsFractionalInstNum(t *testing.T) {
 	input := `job-a,worker,1.5,Terminated,12,40,400,29.296875,100,V100
 `
@@ -57,6 +77,21 @@ func TestReadTaskRecordsRejectsFractionalInstNum(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "inst_num must be an integer") {
 		t.Fatalf("ScanTaskRecords() error = %v, want inst_num integer error", err)
+	}
+}
+
+func TestReadTaskRecordsRejectsMalformedPlanGPU(t *testing.T) {
+	input := `job-a,worker,1,Terminated,12,40,400,29.296875,not-a-number,V100
+`
+
+	err := ScanTaskRecords(strings.NewReader(input), func(record TaskRecord) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("ScanTaskRecords() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "plan_gpu must be a number") {
+		t.Fatalf("ScanTaskRecords() error = %v, want plan_gpu number error", err)
 	}
 }
 

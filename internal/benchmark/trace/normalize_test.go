@@ -92,6 +92,69 @@ func TestNormalizeJobsFailsOnInvalidRuntime(t *testing.T) {
 	}
 }
 
+func TestNormalizeJobsSkipsNonMatchingStatusBeforeParsingTimes(t *testing.T) {
+	jobsInput := `job-running,1000,user-a,Running,10,
+job-a,1001,user-a,Terminated,20,40
+`
+	tasksInput := `job-a,worker,1,Terminated,21,40,400,10,0,CPU
+`
+
+	got, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err != nil {
+		t.Fatalf("NormalizeJobs() error = %v", err)
+	}
+	if len(got) != 1 || got[0].JobID != "1001" {
+		t.Fatalf("NormalizeJobs() = %#v, want only terminated job", got)
+	}
+}
+
+func TestNormalizeJobsFailsWhenIncludedStatusHasBlankEndTime(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,20,
+`
+	tasksInput := `job-a,worker,1,Terminated,21,40,400,10,0,CPU
+`
+
+	_, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err == nil {
+		t.Fatal("NormalizeJobs() error = nil, want blank included end_time error")
+	}
+	if !strings.Contains(err.Error(), "end_time must be a number") {
+		t.Fatalf("NormalizeJobs() error = %v, want end_time parse error", err)
+	}
+}
+
+func TestNormalizeJobsSkipsUnselectedTaskBeforeParsingTimes(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,20,40
+job-failed,1002,user-a,Failed,20,30
+`
+	tasksInput := `job-failed,worker,1,Failed,21,,400,10,0,CPU
+job-a,worker,1,Terminated,21,40,400,10,0,CPU
+`
+
+	got, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err != nil {
+		t.Fatalf("NormalizeJobs() error = %v", err)
+	}
+	if len(got) != 1 || got[0].JobID != "1001" {
+		t.Fatalf("NormalizeJobs() = %#v, want only selected job", got)
+	}
+}
+
+func TestNormalizeJobsFailsWhenSelectedTaskHasBlankEndTime(t *testing.T) {
+	jobsInput := `job-a,1001,user-a,Terminated,20,40
+`
+	tasksInput := `job-a,worker,1,Terminated,21,,400,10,0,CPU
+`
+
+	_, err := NormalizeJobs(strings.NewReader(jobsInput), strings.NewReader(tasksInput), NormalizeOptions{})
+	if err == nil {
+		t.Fatal("NormalizeJobs() error = nil, want blank selected task end_time error")
+	}
+	if !strings.Contains(err.Error(), "end_time must be a number") {
+		t.Fatalf("NormalizeJobs() error = %v, want end_time parse error", err)
+	}
+}
+
 func TestNormalizeJobsFailsOnDuplicateJobID(t *testing.T) {
 	jobsInput := `job-a,1001,user-a,Terminated,10,40
 job-b,1001,user-b,Terminated,11,40

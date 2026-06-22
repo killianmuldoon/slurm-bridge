@@ -51,9 +51,17 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 
 	selected := map[string]JobRecord{}
 	order := []string{}
-	if err := ScanJobRecords(jobReader, func(record JobRecord) error {
-		if record.Status != opts.Status {
+	if err := scanJobRows(jobReader, func(row []string) error {
+		if len(row) < jobColumnCount {
+			return fmt.Errorf("expected at least %d columns, got %d", jobColumnCount, len(row))
+		}
+		if strings.TrimSpace(row[jobStatusIndex]) != opts.Status {
 			return nil
+		}
+
+		record, err := parseJobRecord(row)
+		if err != nil {
+			return err
 		}
 		if _, exists := selected[record.JobName]; exists {
 			return fmt.Errorf("duplicate job_name %q", record.JobName)
@@ -66,9 +74,18 @@ func NormalizeJobs(jobReader io.Reader, taskReader io.Reader, opts NormalizeOpti
 	}
 
 	tasksByJob := map[string][]TaskRecord{}
-	if err := ScanTaskRecords(taskReader, func(record TaskRecord) error {
-		if _, ok := selected[record.JobName]; !ok {
+	if err := scanTaskRows(taskReader, func(row []string) error {
+		if len(row) < taskColumnCount {
+			return fmt.Errorf("expected at least %d columns, got %d", taskColumnCount, len(row))
+		}
+		jobName := strings.TrimSpace(row[taskJobNameIndex])
+		if _, ok := selected[jobName]; !ok {
 			return nil
+		}
+
+		record, err := parseTaskRecord(row)
+		if err != nil {
+			return err
 		}
 		tasksByJob[record.JobName] = append(tasksByJob[record.JobName], record)
 		return nil
@@ -121,6 +138,14 @@ func WriteJobsJSONL(w io.Writer, jobs []BenchmarkJob) error {
 		}
 	}
 	return nil
+}
+
+func scanJobRows(r io.Reader, visit func([]string) error) error {
+	return scanCSVRows(JobTableFilename, r, visit)
+}
+
+func scanTaskRows(r io.Reader, visit func([]string) error) error {
+	return scanCSVRows(TaskTableFilename, r, visit)
 }
 
 func normalizeJob(job JobRecord, tasks []TaskRecord) (BenchmarkJob, error) {
