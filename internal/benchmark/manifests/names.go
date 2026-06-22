@@ -13,10 +13,17 @@ import (
 const dnsLabelMaxLength = 63
 
 func MachineNodeName(machine string) string {
-	source := strings.TrimSpace(machine)
+	return KubernetesName("pai-machine", machine)
+}
+
+func KubernetesName(fallback string, parts ...string) string {
+	source := strings.TrimSpace(strings.Join(parts, "-"))
 	base := dnsLabel(source)
 	if base == "" {
-		base = "pai-machine"
+		base = dnsLabel(fallback)
+	}
+	if base == "" {
+		base = "benchmark"
 	}
 
 	if base == source && len(base) <= dnsLabelMaxLength {

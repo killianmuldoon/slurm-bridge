@@ -15,7 +15,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -92,7 +91,7 @@ func WriteNodesYAMLFromMachineSpecs(w io.Writer, r io.Reader, opts NodeOptions) 
 		}
 		seenNames[node.Name] = spec.Machine
 
-		if err := writeNodeYAML(w, node, written > 0); err != nil {
+		if err := writeYAMLDocument(w, node, written > 0); err != nil {
 			return err
 		}
 		written++
@@ -159,28 +158,10 @@ func NodeFromMachineSpec(spec trace.MachineSpec, opts NodeOptions) (*corev1.Node
 
 func WriteNodesYAML(w io.Writer, nodes []*corev1.Node) error {
 	for i, node := range nodes {
-		if err := writeNodeYAML(w, node, i > 0); err != nil {
+		if err := writeYAMLDocument(w, node, i > 0); err != nil {
 			return err
 		}
 	}
-	return nil
-}
-
-func writeNodeYAML(w io.Writer, node *corev1.Node, separator bool) error {
-	if separator {
-		if _, err := fmt.Fprintln(w, "---"); err != nil {
-			return err
-		}
-	}
-
-	out, err := yaml.Marshal(node)
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(out); err != nil {
-		return err
-	}
-
 	return nil
 }
 
