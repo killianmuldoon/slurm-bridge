@@ -10,11 +10,14 @@ import (
 	"strconv"
 
 	"github.com/SlinkyProject/slurm-bridge/internal/benchmark/trace"
+	"github.com/SlinkyProject/slurm-bridge/internal/nodeinfo"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils"
 	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -108,6 +111,50 @@ func WriteNodesYAMLFromMachineSpecs(w io.Writer, r io.Reader, opts NodeOptions) 
 	return written, nil
 }
 
+func WriteResourceSlicesYAMLFromMachineSpecs(w io.Writer, r io.Reader, opts NodeOptions) (int, error) {
+	opts = opts.withDefaults()
+	if err := opts.validate(); err != nil {
+		return 0, err
+	}
+
+	written := 0
+	includedNodes := 0
+	seenNames := map[string]string{}
+	err := trace.ScanMachineSpecs(r, func(spec trace.MachineSpec) error {
+		if spec.CapGPU == 0 && !opts.IncludeCPUOnlyNodes {
+			return nil
+		}
+
+		if spec.CapGPU > 0 {
+			resourceSlice, err := ResourceSliceFromMachineSpec(spec)
+			if err != nil {
+				return err
+			}
+			if previous, ok := seenNames[resourceSlice.Name]; ok {
+				return fmt.Errorf("machine %q and %q both map to resource slice name %q", previous, spec.Machine, resourceSlice.Name)
+			}
+			seenNames[resourceSlice.Name] = spec.Machine
+
+			if err := writeYAMLDocument(w, resourceSlice, written > 0); err != nil {
+				return err
+			}
+			written++
+		}
+
+		includedNodes++
+		if opts.NodeLimit > 0 && includedNodes >= opts.NodeLimit {
+			return trace.ErrStopScan
+		}
+
+		return nil
+	})
+	if err != nil {
+		return written, err
+	}
+
+	return written, nil
+}
+
 func NodeFromMachineSpec(spec trace.MachineSpec, opts NodeOptions) (*corev1.Node, error) {
 	opts = opts.withDefaults()
 
@@ -154,6 +201,49 @@ func NodeFromMachineSpec(spec trace.MachineSpec, opts NodeOptions) (*corev1.Node
 	}
 
 	return node, nil
+}
+
+func ResourceSliceFromMachineSpec(spec trace.MachineSpec) (*resourcev1.ResourceSlice, error) {
+	if spec.CapGPU < 0 {
+		return nil, fmt.Errorf("machine %q has negative GPU capacity %d", spec.Machine, spec.CapGPU)
+	}
+	if spec.CapGPU > 128 {
+		return nil, fmt.Errorf("machine %q has GPU capacity %d, want <= 128 for one ResourceSlice", spec.Machine, spec.CapGPU)
+	}
+
+	nodeName := MachineNodeName(spec.Machine)
+	devices := make([]resourcev1.Device, 0, spec.CapGPU)
+	for i := int64(0); i < spec.CapGPU; i++ {
+		devices = append(devices, resourcev1.Device{Name: fmt.Sprintf("gpu-%d", i)})
+	}
+
+	return &resourcev1.ResourceSlice{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "resource.k8s.io/v1",
+			Kind:       "ResourceSlice",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ResourceSliceName(nodeName),
+			Labels: map[string]string{
+				LabelSource:  SourceAlibabaPAI,
+				LabelGPUType: LabelValue(spec.GPUType),
+			},
+		},
+		Spec: resourcev1.ResourceSliceSpec{
+			Driver:   nodeinfo.DraDriverGpuNvidia,
+			NodeName: ptr.To(nodeName),
+			Pool: resourcev1.ResourcePool{
+				Name:               nodeName,
+				Generation:         1,
+				ResourceSliceCount: 1,
+			},
+			Devices: devices,
+		},
+	}, nil
+}
+
+func ResourceSliceName(nodeName string) string {
+	return KubernetesName("pai-rs", nodeName, "gpu")
 }
 
 func WriteNodesYAML(w io.Writer, nodes []*corev1.Node) error {

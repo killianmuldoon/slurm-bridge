@@ -52,13 +52,13 @@ func TestPodsForJob(t *testing.T) {
 	}
 
 	pod := got[1]
-	if pod.Name != "pai-1001-worker-0" || pod.Namespace != "bench" {
+	if pod.Name != "pai-1001-worker-worker-0-0" || pod.Namespace != "bench" {
 		t.Fatalf("pod metadata = %s/%s", pod.Namespace, pod.Name)
 	}
 	if pod.Labels[v1alpha1.PodGroupLabel] != "pai-1001" || pod.Labels[LabelTaskName] != "worker" {
 		t.Fatalf("pod labels = %#v", pod.Labels)
 	}
-	if pod.Annotations[AnnotationTraceSubmitTime] != "10" || pod.Annotations[AnnotationSimulatedRuntimeSeconds] != "28" || pod.Annotations[AnnotationRuntimeDelay] != "2.8s" {
+	if pod.Annotations[AnnotationTraceSubmitTime] != "10" || pod.Annotations[AnnotationTraceInstanceName] != "worker-0" || pod.Annotations[AnnotationTraceStartTime] != "12" || pod.Annotations[AnnotationTraceEndTime] != "30" || pod.Annotations[AnnotationSimulatedRuntimeSeconds] != "18" || pod.Annotations[AnnotationRuntimeDelay] != "1.8s" {
 		t.Fatalf("pod annotations = %#v", pod.Annotations)
 	}
 	if pod.Spec.SchedulerName != "custom-scheduler" || pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
@@ -114,8 +114,42 @@ func benchmarkJob() trace.BenchmarkJob {
 		SubmitTime:              10,
 		SimulatedRuntimeSeconds: 28,
 		Roles: []trace.BenchmarkRole{
-			{TaskName: "ps", Replicas: 1, CPUCores: 2, MemoryGB: 10},
-			{TaskName: "worker", Replicas: 2, CPUCores: 4, MemoryGB: 29.296875, GPUCount: 1, GPUType: "V100"},
+			{
+				TaskName: "ps",
+				Replicas: 1,
+				CPUCores: 2,
+				MemoryGB: 10,
+				Pods: []trace.BenchmarkPod{
+					{
+						InstanceName:            "ps-0",
+						OriginalStartTime:       14,
+						OriginalEndTime:         20,
+						SimulatedRuntimeSeconds: 6,
+					},
+				},
+			},
+			{
+				TaskName: "worker",
+				Replicas: 2,
+				CPUCores: 4,
+				MemoryGB: 29.296875,
+				GPUCount: 1,
+				GPUType:  "V100",
+				Pods: []trace.BenchmarkPod{
+					{
+						InstanceName:            "worker-0",
+						OriginalStartTime:       12,
+						OriginalEndTime:         30,
+						SimulatedRuntimeSeconds: 18,
+					},
+					{
+						InstanceName:            "worker-1",
+						OriginalStartTime:       13,
+						OriginalEndTime:         40,
+						SimulatedRuntimeSeconds: 27,
+					},
+				},
+			},
 		},
 	}
 }

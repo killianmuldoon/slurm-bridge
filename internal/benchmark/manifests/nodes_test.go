@@ -5,10 +5,12 @@ package manifests
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/SlinkyProject/slurm-bridge/internal/benchmark/trace"
+	"github.com/SlinkyProject/slurm-bridge/internal/nodeinfo"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils"
 	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
@@ -103,6 +105,42 @@ func TestMachineNodeNameSanitizesInvalidKubernetesNames(t *testing.T) {
 	}
 }
 
+func TestResourceSliceFromMachineSpec(t *testing.T) {
+	resourceSlice, err := ResourceSliceFromMachineSpec(trace.MachineSpec{
+		Machine: "gpu-node",
+		GPUType: "V100",
+		CapGPU:  4,
+	})
+	if err != nil {
+		t.Fatalf("ResourceSliceFromMachineSpec() error = %v", err)
+	}
+
+	if resourceSlice.APIVersion != "resource.k8s.io/v1" || resourceSlice.Kind != "ResourceSlice" {
+		t.Fatalf("resource slice type = %s/%s", resourceSlice.APIVersion, resourceSlice.Kind)
+	}
+	if resourceSlice.Name != "gpu-node-gpu" {
+		t.Fatalf("resource slice name = %q, want gpu-node-gpu", resourceSlice.Name)
+	}
+	if resourceSlice.Spec.Driver != nodeinfo.DraDriverGpuNvidia {
+		t.Fatalf("driver = %q, want %q", resourceSlice.Spec.Driver, nodeinfo.DraDriverGpuNvidia)
+	}
+	if resourceSlice.Spec.NodeName == nil || *resourceSlice.Spec.NodeName != "gpu-node" {
+		t.Fatalf("nodeName = %#v, want gpu-node", resourceSlice.Spec.NodeName)
+	}
+	if resourceSlice.Spec.Pool.Name != "gpu-node" || resourceSlice.Spec.Pool.Generation != 1 || resourceSlice.Spec.Pool.ResourceSliceCount != 1 {
+		t.Fatalf("pool = %#v, want node-local generation 1 pool", resourceSlice.Spec.Pool)
+	}
+	if len(resourceSlice.Spec.Devices) != 4 {
+		t.Fatalf("devices = %#v, want 4 devices", resourceSlice.Spec.Devices)
+	}
+	for i, device := range resourceSlice.Spec.Devices {
+		want := "gpu-" + strconv.Itoa(i)
+		if device.Name != want {
+			t.Fatalf("device %d name = %q, want %q", i, device.Name, want)
+		}
+	}
+}
+
 func TestWriteNodesYAML(t *testing.T) {
 	nodes, err := NodesFromMachineSpecs([]trace.MachineSpec{
 		{Machine: "gpu-node", GPUType: "A100", CapCPU: 64, CapMem: 512, CapGPU: 8},
@@ -129,6 +167,40 @@ func TestWriteNodesYAML(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("rendered YAML missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestWriteResourceSlicesYAMLFromMachineSpecsStreamsAndStopsAtLimit(t *testing.T) {
+	input := `cpu-only,,32,128,0
+gpu-node-a,A100,64,512,8
+gpu-node-b,A100,64,512,4
+`
+
+	var out bytes.Buffer
+	written, err := WriteResourceSlicesYAMLFromMachineSpecs(&out, strings.NewReader(input), NodeOptions{IncludeCPUOnlyNodes: true, NodeLimit: 2})
+	if err != nil {
+		t.Fatalf("WriteResourceSlicesYAMLFromMachineSpecs() error = %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("WriteResourceSlicesYAMLFromMachineSpecs() wrote %d slices, want 1", written)
+	}
+
+	text := out.String()
+	for _, want := range []string{
+		"apiVersion: resource.k8s.io/v1",
+		"kind: ResourceSlice",
+		"name: gpu-node-a-gpu",
+		"driver: gpu.nvidia.com",
+		"nodeName: gpu-node-a",
+		"name: gpu-node-a",
+		"name: gpu-7",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered YAML missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "gpu-node-b") {
+		t.Fatalf("rendered YAML contains resource slice beyond limit:\n%s", text)
 	}
 }
 

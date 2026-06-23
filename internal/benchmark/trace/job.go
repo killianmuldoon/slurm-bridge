@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	JobTableFilename  = "pai_job_table.csv"
-	TaskTableFilename = "pai_task_table.csv"
+	JobTableFilename      = "pai_job_table.csv"
+	TaskTableFilename     = "pai_task_table.csv"
+	InstanceTableFilename = "pai_instance_table.csv"
 )
 
 // The upstream Alibaba PAI job file is headerless and ordered as:
@@ -47,6 +48,21 @@ const (
 	taskColumnCount
 )
 
+// The upstream Alibaba PAI instance file is headerless and ordered as:
+// job_name,task_name,inst_name,worker_name,inst_id,status,start_time,end_time,machine
+const (
+	instanceJobNameIndex = iota
+	instanceTaskNameIndex
+	instanceInstNameIndex
+	instanceWorkerNameIndex
+	instanceInstIDIndex
+	instanceStatusIndex
+	instanceStartTimeIndex
+	instanceEndTimeIndex
+	instanceMachineIndex
+	instanceColumnCount
+)
+
 type JobRecord struct {
 	JobName   string
 	InstID    string
@@ -67,6 +83,18 @@ type TaskRecord struct {
 	PlanMem   float64
 	PlanGPU   float64
 	GPUType   string
+}
+
+type InstanceRecord struct {
+	JobName    string
+	TaskName   string
+	InstName   string
+	WorkerName string
+	InstID     string
+	Status     string
+	StartTime  float64
+	EndTime    float64
+	Machine    string
 }
 
 func ReadJobRecordsFile(path string) ([]JobRecord, error) {
@@ -105,6 +133,24 @@ func ReadTaskRecordsFile(path string) ([]TaskRecord, error) {
 	return records, nil
 }
 
+func ReadInstanceRecordsFile(path string) ([]InstanceRecord, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var records []InstanceRecord
+	if err := ScanInstanceRecords(file, func(record InstanceRecord) error {
+		records = append(records, record)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
 func ScanJobRecords(r io.Reader, visit func(JobRecord) error) error {
 	return scanCSVRows(JobTableFilename, r, func(row []string) error {
 		record, err := parseJobRecord(row)
@@ -124,6 +170,22 @@ func ScanJobRecords(r io.Reader, visit func(JobRecord) error) error {
 func ScanTaskRecords(r io.Reader, visit func(TaskRecord) error) error {
 	return scanCSVRows(TaskTableFilename, r, func(row []string) error {
 		record, err := parseTaskRecord(row)
+		if err != nil {
+			return err
+		}
+		if err := visit(record); err != nil {
+			if errors.Is(err, ErrStopScan) {
+				return ErrStopScan
+			}
+			return err
+		}
+		return nil
+	})
+}
+
+func ScanInstanceRecords(r io.Reader, visit func(InstanceRecord) error) error {
+	return scanCSVRows(InstanceTableFilename, r, func(row []string) error {
+		record, err := parseInstanceRecord(row)
 		if err != nil {
 			return err
 		}
@@ -233,6 +295,33 @@ func parseTaskRecord(row []string) (TaskRecord, error) {
 		PlanMem:   mem,
 		PlanGPU:   gpu,
 		GPUType:   strings.TrimSpace(row[taskGPUTypeIndex]),
+	}, nil
+}
+
+func parseInstanceRecord(row []string) (InstanceRecord, error) {
+	if len(row) < instanceColumnCount {
+		return InstanceRecord{}, fmt.Errorf("expected at least %d columns, got %d", instanceColumnCount, len(row))
+	}
+
+	startTime, err := parseFloat(row[instanceStartTimeIndex], "start_time")
+	if err != nil {
+		return InstanceRecord{}, err
+	}
+	endTime, err := parseFloat(row[instanceEndTimeIndex], "end_time")
+	if err != nil {
+		return InstanceRecord{}, err
+	}
+
+	return InstanceRecord{
+		JobName:    strings.TrimSpace(row[instanceJobNameIndex]),
+		TaskName:   strings.TrimSpace(row[instanceTaskNameIndex]),
+		InstName:   strings.TrimSpace(row[instanceInstNameIndex]),
+		WorkerName: strings.TrimSpace(row[instanceWorkerNameIndex]),
+		InstID:     strings.TrimSpace(row[instanceInstIDIndex]),
+		Status:     strings.TrimSpace(row[instanceStatusIndex]),
+		StartTime:  startTime,
+		EndTime:    endTime,
+		Machine:    strings.TrimSpace(row[instanceMachineIndex]),
 	}, nil
 }
 

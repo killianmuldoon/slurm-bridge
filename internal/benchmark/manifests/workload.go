@@ -33,6 +33,9 @@ const (
 	AnnotationTraceSubmitTime         = "bench.ai/trace-submit-time"
 	AnnotationSimulatedRuntimeSeconds = "bench.ai/simulated-runtime-seconds"
 	AnnotationRuntimeDelay            = "bench.ai/runtime-delay"
+	AnnotationTraceInstanceName       = "bench.ai/trace-instance-name"
+	AnnotationTraceStartTime          = "bench.ai/trace-start-time"
+	AnnotationTraceEndTime            = "bench.ai/trace-end-time"
 	podGroupAPIVersion                = "scheduling.x-k8s.io/v1alpha1"
 )
 
@@ -75,7 +78,7 @@ func PodsForJob(job trace.BenchmarkJob, opts WorkloadOptions) ([]*corev1.Pod, er
 	podGroupName := PodGroupName(job)
 	pods := make([]*corev1.Pod, 0, totalReplicas(job))
 	for _, role := range job.Roles {
-		for i := int32(0); i < role.Replicas; i++ {
+		for i, benchmarkPod := range role.Pods {
 			resources, err := podResourceRequirements(role)
 			if err != nil {
 				return nil, fmt.Errorf("job %q role %q: %w", job.JobID, role.TaskName, err)
@@ -91,13 +94,16 @@ func PodsForJob(job trace.BenchmarkJob, opts WorkloadOptions) ([]*corev1.Pod, er
 					Kind:       "Pod",
 				},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      PodName(job, role, i),
+					Name:      PodName(job, role, benchmarkPod, i),
 					Namespace: opts.Namespace,
 					Labels:    labels,
 					Annotations: map[string]string{
 						AnnotationTraceSubmitTime:         formatFloat(job.SubmitTime),
-						AnnotationSimulatedRuntimeSeconds: formatFloat(job.SimulatedRuntimeSeconds),
-						AnnotationRuntimeDelay:            runtimeDelay(job.SimulatedRuntimeSeconds, opts.RuntimeTimeScale),
+						AnnotationTraceInstanceName:       benchmarkPod.InstanceName,
+						AnnotationTraceStartTime:          formatFloat(benchmarkPod.OriginalStartTime),
+						AnnotationTraceEndTime:            formatFloat(benchmarkPod.OriginalEndTime),
+						AnnotationSimulatedRuntimeSeconds: formatFloat(benchmarkPod.SimulatedRuntimeSeconds),
+						AnnotationRuntimeDelay:            runtimeDelay(benchmarkPod.SimulatedRuntimeSeconds, opts.RuntimeTimeScale),
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -126,8 +132,8 @@ func PodGroupName(job trace.BenchmarkJob) string {
 	return KubernetesName("pai", "pai", job.JobID)
 }
 
-func PodName(job trace.BenchmarkJob, role trace.BenchmarkRole, index int32) string {
-	return KubernetesName("pai-pod", "pai", job.JobID, role.TaskName, strconv.FormatInt(int64(index), 10))
+func PodName(job trace.BenchmarkJob, role trace.BenchmarkRole, pod trace.BenchmarkPod, index int) string {
+	return KubernetesName("pai-pod", "pai", job.JobID, role.TaskName, pod.InstanceName, strconv.FormatInt(int64(index), 10))
 }
 
 func WritePodGroupsYAML(w io.Writer, jobs []trace.BenchmarkJob, opts WorkloadOptions) error {
@@ -167,7 +173,7 @@ func workloadLabels(job trace.BenchmarkJob, runID string) map[string]string {
 func totalReplicas(job trace.BenchmarkJob) int32 {
 	var total int32
 	for _, role := range job.Roles {
-		total += role.Replicas
+		total += int32(len(role.Pods))
 	}
 	return total
 }

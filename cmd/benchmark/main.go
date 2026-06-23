@@ -43,6 +43,8 @@ func runRender(args []string) error {
 	namespace := fs.String("namespace", manifests.DefaultNamespace, "namespace for generated workload objects")
 	runID := fs.String("run-id", manifests.DefaultRunID, "benchmark run identifier for generated workload labels")
 	maxJobs := fs.Int("max-jobs", 0, "maximum number of jobs to render; 0 means unlimited")
+	maxPodsPerJob := fs.Int("max-pods-per-job", 0, "skip jobs with more than this many pods; 0 means unlimited")
+	traceWindow := fs.Duration("trace-window", 0, "trace submit-time window to render from the earliest selected job, for example 168h; 0 means unlimited")
 	runtimeTimeScale := fs.Float64("runtime-time-scale", manifests.DefaultRuntimeTimeScale, "runtime compression factor")
 	nodeLimit := 0
 	fs.IntVar(&nodeLimit, "node-limit", 0, "maximum number of nodes to render; 0 means unlimited")
@@ -87,7 +89,11 @@ func runRender(args []string) error {
 			SchedulerName:    *schedulerName,
 			RunID:            *runID,
 			RuntimeTimeScale: *runtimeTimeScale,
-		}, trace.NormalizeOptions{MaxJobs: *maxJobs}); err != nil {
+		}, trace.NormalizeOptions{
+			MaxJobs:            *maxJobs,
+			MaxPodsPerJob:      *maxPodsPerJob,
+			TraceWindowSeconds: traceWindow.Seconds(),
+		}); err != nil {
 			return err
 		}
 	}
@@ -101,7 +107,7 @@ func requireInputFiles(dataDir string, needNodes, needWorkloads bool) error {
 		required = append(required, trace.MachineSpecFilename)
 	}
 	if needWorkloads {
-		required = append(required, trace.JobTableFilename, trace.TaskTableFilename)
+		required = append(required, trace.JobTableFilename, trace.TaskTableFilename, trace.InstanceTableFilename)
 	}
 
 	for _, name := range required {
@@ -134,6 +140,22 @@ func renderNodes(dataDir, outputDir string, opts manifests.NodeOptions) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "wrote %d nodes to %s\n", written, nodesPath)
+
+	sliceFile, err := os.Open(specPath)
+	if err != nil {
+		return err
+	}
+	defer sliceFile.Close()
+
+	slicesPath := filepath.Join(outputDir, "resourceslices.yaml")
+	if err := writeOutputFile(slicesPath, func(w io.Writer) error {
+		written, err = manifests.WriteResourceSlicesYAMLFromMachineSpecs(w, sliceFile, opts)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "wrote %d resource slices to %s\n", written, slicesPath)
 	return nil
 }
 
@@ -152,7 +174,14 @@ func renderWorkloads(dataDir, outputDir string, workloadOpts manifests.WorkloadO
 	}
 	defer taskFile.Close()
 
-	jobs, err := trace.NormalizeJobs(jobFile, taskFile, normalizeOpts)
+	instancePath := filepath.Join(dataDir, trace.InstanceTableFilename)
+	instanceFile, err := os.Open(instancePath)
+	if err != nil {
+		return err
+	}
+	defer instanceFile.Close()
+
+	jobs, err := trace.NormalizeJobs(jobFile, taskFile, instanceFile, normalizeOpts)
 	if err != nil {
 		return err
 	}

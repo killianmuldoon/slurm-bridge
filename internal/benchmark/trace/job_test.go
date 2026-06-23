@@ -65,6 +65,26 @@ func TestReadTaskRecordsTreatsBlankPlanGPUAsZero(t *testing.T) {
 	}
 }
 
+func TestReadInstanceRecords(t *testing.T) {
+	input := `job-a,worker,worker-0,worker-a,inst-a,Terminated,12,40,m1
+`
+
+	var got []InstanceRecord
+	err := ScanInstanceRecords(strings.NewReader(input), func(record InstanceRecord) error {
+		got = append(got, record)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanInstanceRecords() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ScanInstanceRecords() returned %d records, want 1", len(got))
+	}
+	if got[0].JobName != "job-a" || got[0].TaskName != "worker" || got[0].InstName != "worker-0" || got[0].WorkerName != "worker-a" || got[0].InstID != "inst-a" || got[0].Status != "Terminated" || got[0].StartTime != 12 || got[0].EndTime != 40 || got[0].Machine != "m1" {
+		t.Fatalf("instance = %#v", got[0])
+	}
+}
+
 func TestReadTaskRecordsRejectsFractionalInstNum(t *testing.T) {
 	input := `job-a,worker,1.5,Terminated,12,40,400,29.296875,100,V100
 `
