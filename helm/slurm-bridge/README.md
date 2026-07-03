@@ -43,6 +43,7 @@ Kubernetes: `>= 1.34.0-0`
 | admission.tolerations | list | `[]` | Configure pod tolerations. Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/ |
 | controllers.affinity | object | `{}` | Set affinity for Kubernetes Pod scheduling. Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity |
 | controllers.image | object | `{"repository":"ghcr.io/slinkyproject/slurm-bridge-controllers","tag":""}` | The image to use, `${repository}:${tag}`. Ref: https://kubernetes.io/docs/concepts/containers/images/#image-names |
+| controllers.leaderElect | bool | `false` | Enables leader election. |
 | controllers.nodeSelector | map[string]string | `{}` | Node label selector for pod assignment. Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector |
 | controllers.pdb | object | `{"enabled":false,"maxUnavailable":null,"minAvailable":1}` | PodDisruptionBudget for the controllers deployment |
 | controllers.pdb.enabled | bool | `false` | Enable PodDisruptionBudget |
