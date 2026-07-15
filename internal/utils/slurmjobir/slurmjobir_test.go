@@ -424,7 +424,7 @@ func TestTranslatorParseGPUResourcesUsesDeviceProfile(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: className},
 		Spec: resourcev1.DeviceClassSpec{
 			Selectors: []resourcev1.DeviceSelector{{
-				CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == "gpu.example.com"`},
+				CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == 'gpu.example.com'`},
 			}},
 		},
 	}
@@ -450,7 +450,7 @@ func TestTranslatorParseGPUResourcesCombinesProfileAliases(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec: resourcev1.DeviceClassSpec{
 				Selectors: []resourcev1.DeviceSelector{{
-					CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == "gpu.example.com"`},
+					CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == 'gpu.example.com'`},
 				}},
 			},
 		}
