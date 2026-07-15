@@ -914,7 +914,7 @@ func Test_realSlurmControl_GetResources(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Return GRES",
+			name: "Return GRES and node comment",
 			fields: fields{
 				Client: func() client.Client {
 					f := interceptor.Funcs{
@@ -939,6 +939,9 @@ func Test_realSlurmControl_GetResources(t *testing.T) {
 								layout := resources.DeepCopy()
 								*o = *layout
 							}
+							if o, ok := obj.(*slurmtypes.V0044Node); ok {
+								o.Comment = ptr.To("slurm-bridge.dra-gres-map={}")
+							}
 							return nil
 						},
 					}
@@ -957,7 +960,8 @@ func Test_realSlurmControl_GetResources(t *testing.T) {
 				nodeName: "node2",
 			},
 			want: &NodeResources{
-				Node: "node2",
+				Node:        "node2",
+				NodeComment: "slurm-bridge.dra-gres-map={}",
 				Gres: []GresLayout{
 					{
 						Count: int64(2),
