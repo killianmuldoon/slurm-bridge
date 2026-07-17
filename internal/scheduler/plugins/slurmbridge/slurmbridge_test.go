@@ -496,7 +496,7 @@ func TestSlurmBridge_PreFilterValidatesAllExternalJobPods(t *testing.T) {
 
 	kubeClient := kubefake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(podA.DeepCopy(), podB.DeepCopy(), podGroup.DeepCopy()).
+		WithObjects(podA.DeepCopy(), podB.DeepCopy(), podGroup.DeepCopy(), exampleGPUDeviceClass("gpu.example.com")).
 		Build()
 	slurmClient := fake.NewClientBuilder().Build()
 	sb := &SlurmBridge{
