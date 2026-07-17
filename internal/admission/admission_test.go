@@ -71,12 +71,12 @@ func TestPodAdmission_Default(t *testing.T) {
 	}
 }
 
-func TestValidateCPUResources(t *testing.T) {
-	cpuDRA := corev1.ResourceName(nodeinfo.DraDriverCpu_ExtendedResourceName)
+func TestPodRequestsNativeCPU(t *testing.T) {
+	cpuDRA := corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + nodeinfo.DraDriverCpu)
 	tests := []struct {
-		name    string
-		pod     *corev1.Pod
-		wantErr bool
+		name string
+		pod  *corev1.Pod
+		want bool
 	}{
 		{
 			name: "native CPU only",
@@ -85,6 +85,7 @@ func TestValidateCPUResources(t *testing.T) {
 					corev1.ResourceCPU: resource.MustParse("1"),
 				}},
 			}}}},
+			want: true,
 		},
 		{
 			name: "CPU DRA only",
@@ -102,7 +103,7 @@ func TestValidateCPUResources(t *testing.T) {
 					cpuDRA:             resource.MustParse("1"),
 				}},
 			}}}},
-			wantErr: true,
+			want: true,
 		},
 		{
 			name: "native CPU in init container and DRA CPU in app container",
@@ -118,7 +119,7 @@ func TestValidateCPUResources(t *testing.T) {
 					}},
 				}},
 			}},
-			wantErr: true,
+			want: true,
 		},
 		{
 			name: "native pod-level CPU and container DRA CPU",
@@ -132,22 +133,21 @@ func TestValidateCPUResources(t *testing.T) {
 					}},
 				}},
 			}},
-			wantErr: true,
+			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCPUResources(tt.pod)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("validateCPUResources() error = %v, wantErr %v", err, tt.wantErr)
+			if got := podRequestsNativeCPU(tt.pod); got != tt.want {
+				t.Fatalf("podRequestsNativeCPU() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestValidateAnnotationConflicts(t *testing.T) {
-	cpuDRA := corev1.ResourceName(nodeinfo.DraDriverCpu_ExtendedResourceName)
+	cpuDRA := corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + nodeinfo.DraDriverCpu)
 	gpuDRA := corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + "gpu.nvidia.com")
 
 	tests := []struct {
@@ -632,26 +632,6 @@ func TestPodAdmission_ValidateCreate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "PodWithNativeAndDRACPU",
-			fields: fields{
-				ManagedNamespaces: []string{namespace},
-			},
-			args: args{
-				ctx: context.TODO(),
-				pod: &corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{Namespace: namespace},
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{
-						Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
-							corev1.ResourceCPU: resource.MustParse("1"),
-							corev1.ResourceName(nodeinfo.DraDriverCpu_ExtendedResourceName): resource.MustParse("1"),
-						}},
-					}}},
-				},
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
 			name: "PodWithUnsupportedDRAClass",
 			fields: fields{
 				ManagedNamespaces: []string{namespace},
@@ -672,8 +652,8 @@ func TestPodAdmission_ValidateCreate(t *testing.T) {
 					}}},
 				},
 			},
-			wantWarningContains: `get device class "other.gpu.example.com"`,
-			wantErr:             false,
+			want:    nil,
+			wantErr: true,
 		},
 		{
 			name: "PodWithUnsupportedDRAClassInUnmanagedNamespace",
@@ -882,6 +862,118 @@ func TestPodAdmission_ValidateCreate_DRA(t *testing.T) {
 		}
 	})
 
+	t.Run("zero DeviceClass request", func(t *testing.T) {
+		pod := newPod()
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			deviceResource: resource.MustParse("0"),
+		}
+		warnings, err := newAdmission(validClass()).ValidateCreate(context.Background(), pod)
+		if err == nil || !strings.Contains(err.Error(), `container "work" resource request "deviceclass.resource.kubernetes.io/gpu.example.com" must be greater than zero`) {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want positive quantity error", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
+	t.Run("zero DeviceClass limit in init container", func(t *testing.T) {
+		pod := newPod()
+		pod.Spec.InitContainers = []corev1.Container{{
+			Name: "init",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+				deviceResource: resource.MustParse("0"),
+			}},
+		}}
+		warnings, err := newAdmission(validClass()).ValidateCreate(context.Background(), pod)
+		if err == nil || !strings.Contains(err.Error(), `container "init" resource limit "deviceclass.resource.kubernetes.io/gpu.example.com" must be greater than zero`) {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want positive quantity error", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
+	t.Run("zero pod-level CPU request", func(t *testing.T) {
+		pod := newPod()
+		pod.Spec.Resources = &corev1.ResourceRequirements{Requests: corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("0"),
+		}}
+		warnings, err := newAdmission().ValidateCreate(context.Background(), pod)
+		if err == nil || !strings.Contains(err.Error(), `pod resource request "cpu" must be greater than zero`) {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want positive quantity error", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
+	t.Run("CPU profile request", func(t *testing.T) {
+		cpuClass := &resourcev1.DeviceClass{
+			ObjectMeta: metav1.ObjectMeta{Name: nodeinfo.DraDriverCpu},
+			Spec: resourcev1.DeviceClassSpec{
+				Selectors: []resourcev1.DeviceSelector{{
+					CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == "dra.cpu"`},
+				}},
+			},
+		}
+		pod := newPod()
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + nodeinfo.DraDriverCpu): resource.MustParse("1"),
+		}
+		warnings, err := newAdmission(cpuClass).ValidateCreate(context.Background(), pod)
+		if err != nil {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
+	t.Run("CPU profile alias", func(t *testing.T) {
+		const alias = "my-cpus"
+		cpuClass := &resourcev1.DeviceClass{
+			ObjectMeta: metav1.ObjectMeta{Name: alias},
+			Spec: resourcev1.DeviceClassSpec{
+				Selectors: []resourcev1.DeviceSelector{{
+					CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == "dra.cpu"`},
+				}},
+			},
+		}
+		pod := newPod()
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + alias): resource.MustParse("1"),
+		}
+		warnings, err := newAdmission(cpuClass).ValidateCreate(context.Background(), pod)
+		if err != nil {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
+	t.Run("native CPU with core-bitmap alias", func(t *testing.T) {
+		const alias = "my-cpus"
+		cpuClass := &resourcev1.DeviceClass{
+			ObjectMeta: metav1.ObjectMeta{Name: alias},
+			Spec: resourcev1.DeviceClassSpec{Selectors: []resourcev1.DeviceSelector{{
+				CEL: &resourcev1.CELDeviceSelector{Expression: `device.driver == "dra.cpu"`},
+			}}},
+		}
+		pod := newPod()
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("1"),
+			corev1.ResourceName(resourcev1.ResourceDeviceClassPrefix + alias): resource.MustParse("1"),
+		}
+		warnings, err := newAdmission(cpuClass).ValidateCreate(context.Background(), pod)
+		if err == nil || !strings.Contains(err.Error(), `core-bitmap DeviceClass "my-cpus"`) {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want native/core-bitmap conflict", err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
+		}
+	})
+
 	t.Run("limit in init container", func(t *testing.T) {
 		pod := newPod()
 		pod.Spec.InitContainers = []corev1.Container{{
@@ -905,11 +997,11 @@ func TestPodAdmission_ValidateCreate_DRA(t *testing.T) {
 			deviceResource: resource.MustParse("1"),
 		}
 		warnings, err := newAdmission().ValidateCreate(context.Background(), pod)
-		if err != nil {
-			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want warning", err)
+		if err == nil || !strings.Contains(err.Error(), `get device class "gpu.example.com"`) {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want missing DeviceClass error", err)
 		}
-		if len(warnings) != 1 || !strings.Contains(warnings[0], `get device class "gpu.example.com"`) {
-			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want missing DeviceClass warning", warnings)
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
 		}
 	})
 
@@ -921,11 +1013,11 @@ func TestPodAdmission_ValidateCreate_DRA(t *testing.T) {
 			deviceResource: resource.MustParse("1"),
 		}
 		warnings, err := newAdmission(class).ValidateCreate(context.Background(), pod)
-		if err != nil {
-			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want warning", err)
+		if err == nil || !strings.Contains(err.Error(), "does not match a supported device profile") {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want selector mismatch error", err)
 		}
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "does not match a supported device profile") {
-			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want selector mismatch warning", warnings)
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
 		}
 	})
 
@@ -946,11 +1038,11 @@ func TestPodAdmission_ValidateCreate_DRA(t *testing.T) {
 			deviceResource: resource.MustParse("1"),
 		}
 		warnings, err := newAdmission(class).ValidateCreate(context.Background(), pod)
-		if err != nil {
-			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want warning", err)
+		if err == nil || !strings.Contains(err.Error(), "configuration is not supported") {
+			t.Fatalf("PodAdmission.ValidateCreate() error = %v, want unsupported configuration error", err)
 		}
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "configuration is not supported") {
-			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want unsupported configuration warning", warnings)
+		if len(warnings) != 0 {
+			t.Fatalf("PodAdmission.ValidateCreate() warnings = %v, want none", warnings)
 		}
 	})
 }
