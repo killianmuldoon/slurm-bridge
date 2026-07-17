@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/SlinkyProject/slurm-bridge/internal/dra"
 	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
@@ -161,7 +162,7 @@ func TestTranslateToSlurmJobIR(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := TranslateToSlurmJobIR(tt.args.client, tt.args.ctx, tt.args.pod)
+			got, err := TranslateToSlurmJobIR(tt.args.client, dra.DefaultRegistry(), tt.args.ctx, tt.args.pod)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("TranslateToSlurmJobIR() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -392,8 +393,9 @@ func TestTranslatorParseGPUResources(t *testing.T) {
 		},
 	}
 	translator := translator{
-		Reader: fake.NewClientBuilder().Build(),
-		ctx:    context.Background(),
+		Reader:      fake.NewClientBuilder().Build(),
+		ctx:         context.Background(),
+		draRegistry: dra.DefaultRegistry(),
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -432,8 +434,9 @@ func TestTranslatorParseGPUResourcesUsesDeviceProfile(t *testing.T) {
 		podWithGPU(resourcev1.ResourceDeviceClassPrefix+className, "2"),
 	}}}
 	translator := translator{
-		Reader: fake.NewClientBuilder().WithObjects(deviceClass).Build(),
-		ctx:    context.Background(),
+		Reader:      fake.NewClientBuilder().WithObjects(deviceClass).Build(),
+		ctx:         context.Background(),
+		draRegistry: dra.DefaultRegistry(),
 	}
 
 	if err := translator.parseGPUResources(ir); err != nil {
@@ -459,8 +462,9 @@ func TestTranslatorParseGPUResourcesUsesNVIDIADeviceProfile(t *testing.T) {
 		podWithGPU(resourcev1.ResourceDeviceClassPrefix+className, "2"),
 	}}}
 	translator := translator{
-		Reader: fake.NewClientBuilder().WithObjects(deviceClass).Build(),
-		ctx:    context.Background(),
+		Reader:      fake.NewClientBuilder().WithObjects(deviceClass).Build(),
+		ctx:         context.Background(),
+		draRegistry: dra.DefaultRegistry(),
 	}
 
 	if err := translator.parseGPUResources(ir); err != nil {
@@ -485,8 +489,9 @@ func TestTranslatorParseGPUResourcesKeepsNVIDIADevicePluginSeparateFromDRAAlias(
 		podWithGPU(nvidiaDevicePlugin, "2"),
 	}}}
 	translator := translator{
-		Reader: fake.NewClientBuilder().WithObjects(deviceClass).Build(),
-		ctx:    context.Background(),
+		Reader:      fake.NewClientBuilder().WithObjects(deviceClass).Build(),
+		ctx:         context.Background(),
+		draRegistry: dra.DefaultRegistry(),
 	}
 
 	if err := translator.parseGPUResources(ir); err != nil {
@@ -523,8 +528,9 @@ func TestTranslatorParseGPUResourcesCombinesProfileAliases(t *testing.T) {
 		},
 	}
 	translator := translator{
-		Reader: fake.NewClientBuilder().WithObjects(newClass("class-a"), newClass("class-b")).Build(),
-		ctx:    context.Background(),
+		Reader:      fake.NewClientBuilder().WithObjects(newClass("class-a"), newClass("class-b")).Build(),
+		ctx:         context.Background(),
+		draRegistry: dra.DefaultRegistry(),
 	}
 
 	if err := translator.parseGPUResources(ir); err != nil {

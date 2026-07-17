@@ -33,6 +33,7 @@ import (
 
 	"github.com/SlinkyProject/slurm-bridge/internal/config"
 	nodecontrollerutils "github.com/SlinkyProject/slurm-bridge/internal/controller/node/utils"
+	"github.com/SlinkyProject/slurm-bridge/internal/dra"
 	"github.com/SlinkyProject/slurm-bridge/internal/scheduler/plugins/slurmbridge/slurmcontrol"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils"
 	"github.com/SlinkyProject/slurm-bridge/internal/utils/slurmjobir"
@@ -132,6 +133,7 @@ type SlurmBridge struct {
 	schedulerName string
 	slurmControl  slurmcontrol.SlurmControlInterface
 	handle        fwk.Handle
+	draRegistry   *dra.Registry
 }
 
 var _ fwk.PreEnqueuePlugin = &SlurmBridge{}
@@ -215,6 +217,7 @@ func New(ctx context.Context, obj runtime.Object, handle fwk.Handle) (fwk.Plugin
 		schedulerName: cfg.SchedulerName,
 		slurmControl:  sc,
 		handle:        handle,
+		draRegistry:   dra.DefaultRegistry(),
 	}
 	return plugin, nil
 }
@@ -263,7 +266,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 	}
 
 	// Construct an intermediate representation of the Slurm external job
-	s.slurmJobIR, err = slurmjobir.TranslateToSlurmJobIR(sb.Client, ctx, pod)
+	s.slurmJobIR, err = slurmjobir.TranslateToSlurmJobIR(sb.Client, sb.draRegistry, ctx, pod)
 	if err != nil {
 		return nil, fwk.NewStatus(fwk.Error, err.Error())
 	}
@@ -292,7 +295,7 @@ func (sb *SlurmBridge) PreFilter(ctx context.Context, state fwk.CycleState, pod 
 	}
 
 	// Perform resource specific PreFilter
-	fs := slurmjobir.PreFilter(sb.Client, ctx, pod, s.slurmJobIR)
+	fs := slurmjobir.PreFilter(sb.Client, sb.draRegistry, ctx, pod, s.slurmJobIR)
 	if fs.Code() != fwk.Success {
 		// If the external job is determined to no longer be valid
 		// delete the external job and remove the associated annotations
@@ -605,7 +608,7 @@ func (sb *SlurmBridge) slurmToKubeNodes(ctx context.Context, slurmNodes []string
 func (sb *SlurmBridge) deleteExternalJob(ctx context.Context, pod *corev1.Pod) error {
 	logger := klog.FromContext(ctx)
 	// Construct an intermediate representation of the Slurm external job
-	slurmJobIR, err := slurmjobir.TranslateToSlurmJobIR(sb.Client, ctx, pod)
+	slurmJobIR, err := slurmjobir.TranslateToSlurmJobIR(sb.Client, sb.draRegistry, ctx, pod)
 	if err != nil {
 		logger.Error(err, "failed to translate to slurmjobir")
 		return err

@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/SlinkyProject/slurm-bridge/internal/dra"
 	"github.com/SlinkyProject/slurm-bridge/internal/wellknown"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -458,7 +459,7 @@ func TestTranslateToSlurmJobIR_PodGroupAnnotations(t *testing.T) {
 			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 
 			pod := tt.objects[len(tt.objects)-2].(*corev1.Pod).DeepCopy()
-			got, err := TranslateToSlurmJobIR(cl, context.TODO(), pod)
+			got, err := TranslateToSlurmJobIR(cl, dra.DefaultRegistry(), context.TODO(), pod)
 			if err != nil {
 				t.Fatalf("TranslateToSlurmJobIR() error = %v", err)
 			}
